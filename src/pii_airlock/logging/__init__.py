@@ -1,0 +1,5 @@
+"""Logging configuration module for PII-AIRLOCK."""
+
+from pii_airlock.logging.setup import get_logger, setup_logging
+
+__all__ = ["get_logger", "setup_logging"]

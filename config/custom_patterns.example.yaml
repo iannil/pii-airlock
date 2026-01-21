@@ -1,0 +1,79 @@
+# PII-AIRLOCK 自定义 PII 模式配置示例
+#
+# 此文件定义了企业特定的 PII 识别规则。
+# 将此文件重命名为 custom_patterns.yaml 并根据需要修改。
+#
+# 配置方式:
+#   设置环境变量 PII_AIRLOCK_CONFIG_PATH 指向配置文件路径
+#   例如: export PII_AIRLOCK_CONFIG_PATH=./config/custom_patterns.yaml
+
+patterns:
+  # 员工编号
+  # 匹配格式: EMPA123456 (EMP + 1个大写字母 + 6位数字)
+  - name: employee_id
+    entity_type: EMPLOYEE_ID
+    regex: "EMP[A-Z]\\d{6}"
+    score: 0.85
+    context:
+      - 员工
+      - 工号
+      - employee
+      - 编号
+
+  # 项目编码
+  # 匹配格式: PROJ-2024-AB (PROJ- + 4位年份 + 2个大写字母)
+  - name: project_code
+    entity_type: PROJECT_CODE
+    regex: "PROJ-\\d{4}-[A-Z]{2}"
+    score: 0.9
+    context:
+      - 项目
+      - project
+      - 编码
+
+  # 内部订单号
+  # 匹配格式: ORD + 12位数字
+  - name: internal_order
+    entity_type: ORDER_ID
+    regex: "ORD\\d{12}"
+    score: 0.8
+    context:
+      - 订单
+      - order
+      - 单号
+
+  # 内部工单号
+  # 匹配格式: TKT-YYYYMMDD-XXXX (TKT- + 日期 + 4位序号)
+  - name: ticket_number
+    entity_type: TICKET_ID
+    regex: "TKT-\\d{8}-\\d{4}"
+    score: 0.85
+    context:
+      - 工单
+      - ticket
+      - 编号
+
+  # 车牌号 (中国大陆)
+  # 匹配格式: 京A12345, 沪B1234F 等
+  - name: license_plate
+    entity_type: LICENSE_PLATE
+    regex: "[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼使领][A-Z][A-Z0-9]{5,6}"
+    score: 0.8
+    context:
+      - 车牌
+      - 牌照
+      - plate
+      - 车辆
+
+# 配置字段说明:
+#
+# name: 模式名称，用于日志和识别器命名 (必填)
+# entity_type: 实体类型，将用于生成占位符如 <EMPLOYEE_ID_1> (必填)
+# regex: 正则表达式 (必填)
+# score: 匹配置信度，0.0-1.0，默认 0.7 (可选)
+# context: 上下文关键词列表，用于提高匹配准确性 (可选)
+#
+# 注意:
+# - 正则表达式中的反斜杠需要双重转义: \d 写成 \\d
+# - 建议 score 设置在 0.7-0.95 之间
+# - 添加 context 可以减少误报

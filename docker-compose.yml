@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  pii-airlock:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - PII_AIRLOCK_HOST=0.0.0.0
+      - PII_AIRLOCK_PORT=8000
+      - PII_AIRLOCK_UPSTREAM_URL=https://api.openai.com
+      - PII_AIRLOCK_API_KEY=${OPENAI_API_KEY}
+      - PII_AIRLOCK_MAPPING_TTL=300
+      - PII_AIRLOCK_INJECT_PROMPT=true
+      - PII_AIRLOCK_REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+volumes:
+  redis_data:
