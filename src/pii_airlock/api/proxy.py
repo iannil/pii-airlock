@@ -4,9 +4,15 @@ Proxy logic for forwarding requests to upstream LLM APIs.
 Handles the core workflow:
 1. Intercept request
 2. Anonymize PII in messages
-3. Forward to upstream
-4. Deanonymize PII in response
-5. Return to client
+3. Check cache (if enabled)
+4. Forward to upstream (if cache miss)
+5. Deanonymize PII in response
+6. Return to client
+
+Supports:
+- Multi-tenant isolation
+- LLM response caching
+- Quota enforcement
 """
 
 import json
@@ -34,7 +40,10 @@ from pii_airlock.metrics.collectors import (
     PII_DETECTED,
     UPSTREAM_LATENCY,
     UPSTREAM_ERRORS,
+    QUOTA_EXCEEDED,
 )
+from pii_airlock.cache.llm_cache import LLMCache, get_cache_key
+from pii_airlock.auth.quota import QuotaType, check_quota as check_quota_limit
 
 logger = get_logger(__name__)
 
@@ -51,9 +60,14 @@ class ProxyService:
     This service orchestrates the anonymization workflow:
     - Intercepts incoming requests
     - Anonymizes PII in message content
-    - Forwards requests to upstream LLM
+    - Checks quota limits
+    - Checks cache for cached responses
+    - Forwards requests to upstream LLM (if cache miss)
+    - Stores response in cache (if cache miss)
     - Deanonymizes PII in responses
     - Returns clean responses to clients
+
+    Supports multi-tenant isolation, response caching, and quota enforcement.
 
     Example:
         >>> proxy = ProxyService(
@@ -101,6 +115,8 @@ class ProxyService:
         anonymizer: Optional[Anonymizer] = None,
         inject_anti_hallucination: bool = True,
         timeout: float = 120.0,
+        cache: Optional[LLMCache] = None,
+        enable_cache: bool = False,
     ) -> None:
         """Initialize the proxy service.
 
@@ -111,6 +127,8 @@ class ProxyService:
             anonymizer: Anonymizer instance (default: creates new one).
             inject_anti_hallucination: Whether to inject anti-hallucination prompt.
             timeout: Request timeout in seconds.
+            cache: Optional LLM cache instance.
+            enable_cache: Whether response caching is enabled.
         """
         self.upstream_url = upstream_url.rstrip("/")
         self.api_key = api_key
@@ -119,6 +137,8 @@ class ProxyService:
         self.deanonymizer = Deanonymizer()
         self.inject_anti_hallucination = inject_anti_hallucination
         self.timeout = timeout
+        self.cache = cache
+        self.enable_cache = enable_cache
 
         # Lazy initialization of anonymizer (requires spaCy model)
         self._anonymizer_initialized = False
@@ -252,17 +272,142 @@ class ProxyService:
         result = self.deanonymizer.deanonymize(content, mapping)
         return result.text
 
+    def _check_cache(
+        self,
+        cache_key: str,
+        tenant_id: str,
+        model: str,
+    ) -> Optional[dict]:
+        """Check cache for a cached response.
+
+        Args:
+            cache_key: Cache key to look up.
+            tenant_id: Tenant identifier.
+            model: Model name.
+
+        Returns:
+            Cached response dict if found, None otherwise.
+        """
+        if not self.enable_cache or not self.cache:
+            return None
+
+        entry = self.cache.get(cache_key, tenant_id)
+        if entry:
+            logger.info(
+                "Cache hit for request",
+                extra={
+                    "event": "cache_hit",
+                    "tenant_id": tenant_id,
+                    "model": model,
+                    "cache_key": cache_key[:16] + "...",
+                },
+            )
+            return entry.response_data
+        return None
+
+    def _store_cache(
+        self,
+        cache_key: str,
+        response_data: dict,
+        tenant_id: str,
+        model: str,
+    ) -> None:
+        """Store response in cache.
+
+        Args:
+            cache_key: Cache key to store under.
+            response_data: Response JSON to cache.
+            tenant_id: Tenant identifier.
+            model: Model name.
+        """
+        if not self.enable_cache or not self.cache:
+            return
+
+        self.cache.put(
+            key=cache_key,
+            response_data=response_data,
+            tenant_id=tenant_id,
+            model=model,
+        )
+        logger.debug(
+            "Response cached",
+            extra={
+                "event": "cache_stored",
+                "tenant_id": tenant_id,
+                "model": model,
+                "cache_key": cache_key[:16] + "...",
+            },
+        )
+
+    def _check_and_record_quota(
+        self,
+        tenant_id: str,
+        token_count: int = 0,
+    ) -> bool:
+        """Check quota and record usage.
+
+        Args:
+            tenant_id: Tenant identifier.
+            token_count: Number of tokens to record.
+
+        Returns:
+            True if within quota, False otherwise.
+
+        Raises:
+            QuotaExceededError: If quota limit is exceeded.
+        """
+        # Check request quota
+        allowed, limit = check_quota_limit(tenant_id, QuotaType.REQUESTS, 1)
+        if not allowed:
+            QUOTA_EXCEEDED.labels(tenant_id=tenant_id, quota_type="requests").inc()
+            logger.warning(
+                "Request quota exceeded",
+                extra={
+                    "event": "quota_exceeded",
+                    "tenant_id": tenant_id,
+                    "quota_type": "requests",
+                },
+            )
+            return False
+
+        # Check token quota if tokens provided
+        if token_count > 0:
+            allowed, limit = check_quota_limit(tenant_id, QuotaType.TOKENS, token_count)
+            if not allowed:
+                QUOTA_EXCEEDED.labels(tenant_id=tenant_id, quota_type="tokens").inc()
+                logger.warning(
+                    "Token quota exceeded",
+                    extra={
+                        "event": "quota_exceeded",
+                        "tenant_id": tenant_id,
+                        "quota_type": "tokens",
+                    },
+                )
+                return False
+
+        # Record usage (we'll update with actual token count later)
+        from pii_airlock.auth.quota import get_quota_store
+        quota_store = get_quota_store()
+        quota_store.record_usage(tenant_id, QuotaType.REQUESTS, 1)
+
+        return True
+
     async def chat_completion(
         self,
         request: ChatCompletionRequest,
+        tenant_id: str = "default",
     ) -> ChatCompletionResponse:
         """Process a chat completion request.
 
         Args:
             request: The incoming chat completion request.
+            tenant_id: Tenant identifier for multi-tenant isolation.
 
         Returns:
             Chat completion response with deanonymized content.
+
+        Raises:
+            QuotaExceededError: If quota limit is exceeded.
         """
         request_id = str(uuid.uuid4())
 
@@ -270,10 +415,16 @@ class ProxyService:
             "Processing chat completion request",
             extra={
                 "event": "chat_completion_started",
+                "tenant_id": tenant_id,
                 "model": request.model,
                 "message_count": len(request.messages),
             },
         )
+
+        # Step 0: Check quota
+        if not self._check_and_record_quota(tenant_id):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=429, detail="Quota exceeded")
 
         # Step 1: Anonymize messages
         anonymized_messages, mapping = self._anonymize_messages(
@@ -283,10 +434,71 @@ class ProxyService:
         # Step 2: Inject anti-hallucination prompt
         final_messages = self._inject_system_prompt(anonymized_messages, mapping)
 
-        # Step 3: Store mapping for potential streaming use
-        self.store.save(request_id, mapping)
+        # Step 3: Generate cache key from anonymized messages
+        anonymized_messages_dict = [m.model_dump() for m in anonymized_messages]
+        cache_key = get_cache_key(
+            tenant_id=tenant_id,
+            model=request.model,
+            anonymized_messages=anonymized_messages_dict,
+            temperature=request.temperature,
+            top_p=request.top_p,
+            max_tokens=request.max_tokens,
+            presence_penalty=request.presence_penalty,
+            frequency_penalty=request.frequency_penalty,
+        )
 
-        # Step 4: Forward to upstream
+        # Step 4: Check cache
+        cached_response = self._check_cache(cache_key, tenant_id, request.model)
+        if cached_response:
+            # Deanonymize cached response
+            choices = []
+            for choice_data in cached_response.get("choices", []):
+                message_data = choice_data.get("message", {})
+                original_content = message_data.get("content", "")
+                deanonymized_content = self._deanonymize_content(original_content, mapping)
+
+                choices.append(
+                    Choice(
+                        index=choice_data.get("index", 0),
+                        message=Message(
+                            role=message_data.get("role", "assistant"),
+                            content=deanonymized_content,
+                        ),
+                        finish_reason=choice_data.get("finish_reason"),
+                    )
+                )
+
+            usage_data = cached_response.get("usage")
+            usage = None
+            if usage_data:
+                usage = Usage(
+                    prompt_tokens=usage_data.get("prompt_tokens", 0),
+                    completion_tokens=usage_data.get("completion_tokens", 0),
+                    total_tokens=usage_data.get("total_tokens", 0),
+                )
+
+            logger.info(
+                "Returning cached response",
+                extra={
+                    "event": "chat_completion_from_cache",
+                    "tenant_id": tenant_id,
+                    "model": request.model,
+                    "pii_entities": len(mapping),
+                },
+            )
+
+            return ChatCompletionResponse(
+                id=cached_response.get("id", f"chatcmpl-{request_id}"),
+                created=cached_response.get("created", int(time.time())),
+                model=cached_response.get("model", request.model),
+                choices=choices,
+                usage=usage,
+            )
+
+        # Step 5: Store mapping for potential streaming use
+        self.store.save(request_id, mapping, tenant_id=tenant_id)
+
+        # Step 6: Forward to upstream
         headers = {
             "Content-Type": "application/json",
         }
@@ -317,6 +529,7 @@ class ProxyService:
                 "Forwarding request to upstream",
                 extra={
                     "event": "upstream_request",
+                    "tenant_id": tenant_id,
                     "upstream_url": self.upstream_url,
                     "model": request.model,
                 },
@@ -338,6 +551,7 @@ class ProxyService:
                 "Upstream response received",
                 extra={
                     "event": "upstream_response",
+                    "tenant_id": tenant_id,
                     "model": request.model,
                     "duration_ms": round(upstream_duration * 1000, 2),
                 },
@@ -349,6 +563,7 @@ class ProxyService:
                 "Upstream HTTP error",
                 extra={
                     "event": "upstream_error",
+                    "tenant_id": tenant_id,
                     "error_type": "http_error",
                     "status_code": e.response.status_code,
                     "model": request.model,
@@ -361,6 +576,7 @@ class ProxyService:
                 "Upstream request error",
                 extra={
                     "event": "upstream_error",
+                    "tenant_id": tenant_id,
                     "error_type": "request_error",
                     "error": str(e),
                     "model": request.model,
@@ -368,7 +584,7 @@ class ProxyService:
             )
             raise
 
-        # Step 5: Deanonymize response
+        # Step 7: Deanonymize response
         choices = []
         for choice_data in data.get("choices", []):
             message_data = choice_data.get("message", {})
@@ -386,23 +602,30 @@ class ProxyService:
                 )
             )
 
-        # Step 6: Clean up mapping
-        self.store.delete(request_id)
+        # Step 8: Clean up mapping
+        self.store.delete(request_id, tenant_id=tenant_id)
 
         # Build response
         usage_data = data.get("usage")
         usage = None
         if usage_data:
+            total_tokens = usage_data.get("total_tokens", 0)
             usage = Usage(
                 prompt_tokens=usage_data.get("prompt_tokens", 0),
                 completion_tokens=usage_data.get("completion_tokens", 0),
-                total_tokens=usage_data.get("total_tokens", 0),
+                total_tokens=total_tokens,
             )
+            # Record token quota usage
+            self._check_and_record_quota(tenant_id, token_count=total_tokens)
+
+        # Step 9: Store in cache (before deanonymization)
+        self._store_cache(cache_key, data, tenant_id, request.model)
 
         logger.info(
             "Chat completion completed",
             extra={
                 "event": "chat_completion_completed",
+                "tenant_id": tenant_id,
                 "model": request.model,
                 "pii_entities": len(mapping),
             },
@@ -419,6 +642,7 @@ class ProxyService:
     async def chat_completion_stream(
         self,
         request: ChatCompletionRequest,
+        tenant_id: str = "default",
     ) -> AsyncIterator[str]:
         """Process a streaming chat completion request.
 
@@ -426,8 +650,11 @@ class ProxyService:
         Uses a sliding window buffer to handle placeholders split
         across chunk boundaries.
 
+        Note: Streaming responses bypass cache for now.
+
         Args:
             request: The incoming chat completion request.
+            tenant_id: Tenant identifier for multi-tenant isolation.
 
         Yields:
             SSE-formatted strings (data: {...}\\n\\n or data: [DONE]\\n\\n).
@@ -442,6 +669,7 @@ class ProxyService:
             "Processing streaming chat completion request",
             extra={
                 "event": "chat_completion_stream_started",
+                "tenant_id": tenant_id,
                 "model": request.model,
                 "message_count": len(request.messages),
             },
@@ -455,8 +683,8 @@ class ProxyService:
         # Step 2: Inject anti-hallucination prompt
         final_messages = self._inject_system_prompt(anonymized_messages, mapping)
 
-        # Step 3: Store mapping
-        self.store.save(request_id, mapping)
+        # Step 3: Store mapping with tenant_id
+        self.store.save(request_id, mapping, tenant_id=tenant_id)
 
         # Step 4: Create stream buffer for deanonymization
         buffer = StreamBuffer(mapping, self.deanonymizer)
@@ -500,6 +728,7 @@ class ProxyService:
                 "Starting streaming request to upstream",
                 extra={
                     "event": "upstream_stream_request",
+                    "tenant_id": tenant_id,
                     "upstream_url": self.upstream_url,
                     "model": request.model,
                 },
@@ -540,6 +769,7 @@ class ProxyService:
                                 "Streaming chat completion completed",
                                 extra={
                                     "event": "chat_completion_stream_completed",
+                                    "tenant_id": tenant_id,
                                     "model": request.model,
                                     "pii_entities": len(mapping),
                                     "chunk_count": chunk_count,
@@ -606,6 +836,7 @@ class ProxyService:
                 "Upstream streaming HTTP error",
                 extra={
                     "event": "upstream_stream_error",
+                    "tenant_id": tenant_id,
                     "error_type": "http_error",
                     "status_code": e.response.status_code,
                     "model": request.model,
@@ -618,6 +849,7 @@ class ProxyService:
                 "Upstream streaming request error",
                 extra={
                     "event": "upstream_stream_error",
+                    "tenant_id": tenant_id,
                     "error_type": "request_error",
                     "error": str(e),
                     "model": request.model,
@@ -625,8 +857,8 @@ class ProxyService:
             )
             raise
         finally:
-            # Step 6: Clean up mapping
-            self.store.delete(request_id)
+            # Step 6: Clean up mapping with tenant_id
+            self.store.delete(request_id, tenant_id=tenant_id)
 
     def _format_sse_chunk(
         self,

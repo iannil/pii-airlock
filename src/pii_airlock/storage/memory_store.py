@@ -2,6 +2,7 @@
 Memory-based storage for PII mappings.
 
 Used for development and testing without Redis dependency.
+Supports tenant isolation for multi-tenant deployments.
 """
 
 import threading
@@ -23,6 +24,7 @@ class MemoryStore:
     - Automatic TTL expiration
     - Optional background cleanup thread
     - Prometheus metrics for monitoring
+    - Tenant isolation for multi-tenant deployments
 
     Example:
         >>> store = MemoryStore(default_ttl=300)
@@ -30,6 +32,8 @@ class MemoryStore:
         >>> mapping.add("PERSON", "张三", "<PERSON_1>")
         >>> store.save("request-123", mapping)
         >>> retrieved = store.get("request-123")
+        >>> # With tenant isolation
+        >>> store.save("request-123", mapping, tenant_id="team-a")
     """
 
     def __init__(
@@ -91,11 +95,26 @@ class MemoryStore:
         if self._cleanup_thread and self._cleanup_thread.is_alive():
             self._cleanup_thread.join(timeout=5.0)
 
+    def _make_key(self, request_id: str, tenant_id: Optional[str] = None) -> str:
+        """Generate storage key for a request ID.
+
+        Args:
+            request_id: Unique request identifier.
+            tenant_id: Optional tenant ID for multi-tenant isolation.
+
+        Returns:
+            Storage key string with tenant prefix if provided.
+        """
+        if tenant_id:
+            return f"{tenant_id}:{request_id}"
+        return request_id
+
     def save(
         self,
         request_id: str,
         mapping: PIIMapping,
         ttl: Optional[int] = None,
+        tenant_id: Optional[str] = None,
     ) -> None:
         """Save a mapping with TTL.
 
@@ -103,50 +122,76 @@ class MemoryStore:
             request_id: Unique identifier for the request.
             mapping: The PIIMapping to store.
             ttl: Optional TTL override in seconds.
+            tenant_id: Optional tenant ID for multi-tenant isolation.
         """
+        key = self._make_key(request_id, tenant_id)
         expiry = time.time() + (ttl or self.default_ttl)
         with self._lock:
-            self._store[request_id] = (mapping, expiry)
+            self._store[key] = (mapping, expiry)
             MAPPING_STORE_SIZE.set(len(self._store))
 
-    def get(self, request_id: str) -> Optional[PIIMapping]:
+    def get(self, request_id: str, tenant_id: Optional[str] = None) -> Optional[PIIMapping]:
         """Retrieve a mapping by request ID.
 
         Args:
             request_id: The request identifier.
+            tenant_id: Optional tenant ID for multi-tenant isolation.
 
         Returns:
             The PIIMapping if found and not expired, None otherwise.
         """
+        key = self._make_key(request_id, tenant_id)
         with self._lock:
-            if request_id not in self._store:
+            if key not in self._store:
                 return None
 
-            mapping, expiry = self._store[request_id]
+            mapping, expiry = self._store[key]
 
             if time.time() > expiry:
-                del self._store[request_id]
+                del self._store[key]
                 MAPPING_STORE_SIZE.set(len(self._store))
                 MAPPING_STORE_EXPIRED.inc()
                 return None
 
             return mapping
 
-    def delete(self, request_id: str) -> bool:
+    def delete(self, request_id: str, tenant_id: Optional[str] = None) -> bool:
         """Delete a mapping.
 
         Args:
             request_id: The request identifier.
+            tenant_id: Optional tenant ID for multi-tenant isolation.
 
         Returns:
             True if deleted, False if not found.
         """
+        key = self._make_key(request_id, tenant_id)
         with self._lock:
-            if request_id in self._store:
-                del self._store[request_id]
+            if key in self._store:
+                del self._store[key]
                 MAPPING_STORE_SIZE.set(len(self._store))
                 return True
             return False
+
+    def delete_tenant_keys(self, tenant_id: str) -> int:
+        """Delete all keys for a specific tenant.
+
+        Args:
+            tenant_id: The tenant identifier.
+
+        Returns:
+            Number of keys deleted.
+        """
+        prefix = f"{tenant_id}:"
+        count = 0
+        with self._lock:
+            keys_to_delete = [k for k in self._store if k.startswith(prefix)]
+            for key in keys_to_delete:
+                del self._store[key]
+                count += 1
+            if count:
+                MAPPING_STORE_SIZE.set(len(self._store))
+        return count
 
     def cleanup_expired(self) -> int:
         """Remove all expired mappings.

@@ -56,3 +56,10 @@ MAPPING_STORE_EXPIRED = Counter(
     "pii_airlock_mapping_store_expired_total",
     "Total expired mappings cleaned up",
 )
+
+# Quota metrics
+QUOTA_EXCEEDED = Counter(
+    "pii_airlock_quota_exceeded_total",
+    "Total quota limit violations",
+    ["tenant_id", "quota_type"],
+)

@@ -1,7 +1,7 @@
 """
 FastAPI routes for PII-AIRLOCK proxy service.
 
-Provides OpenAI-compatible API endpoints.
+Provides OpenAI-compatible API endpoints and management API.
 """
 
 import os
@@ -9,11 +9,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi import FastAPI, HTTPException, Request, Depends, status
 from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from pydantic import BaseModel, Field
 
 from pii_airlock import __version__
 from pii_airlock.api.models import (
@@ -28,6 +29,12 @@ from pii_airlock.api.models import (
 )
 from pii_airlock.api.proxy import ProxyService
 from pii_airlock.api.middleware import RequestLoggingMiddleware
+from pii_airlock.api.auth_middleware import (
+    AuthenticationMiddleware,
+    get_tenant_id,
+    get_tenant,
+    get_api_key,
+)
 from pii_airlock.api.limiter import limiter, get_rate_limit, is_rate_limit_enabled
 from pii_airlock.storage.memory_store import MemoryStore
 from pii_airlock.core.anonymizer import Anonymizer
@@ -35,6 +42,12 @@ from pii_airlock.core.deanonymizer import Deanonymizer
 from pii_airlock.core.mapping import PIIMapping
 from pii_airlock.core.strategies import StrategyConfig, StrategyType, get_strategy
 from pii_airlock.logging.setup import get_logger, setup_logging
+
+# Management API imports
+from pii_airlock.auth.tenant import Tenant, get_tenant_config, DEFAULT_TENANT_ID
+from pii_airlock.auth.api_key import APIKey, get_api_key_store, KeyStatus
+from pii_airlock.cache.llm_cache import get_llm_cache, LLMCache
+from pii_airlock.auth.quota import QuotaStore, QuotaType, get_quota_store
 
 # Initialize logging
 setup_logging()
@@ -55,6 +68,10 @@ def get_proxy_service() -> ProxyService:
             default_ttl=int(os.getenv("PII_AIRLOCK_MAPPING_TTL", "300"))
         )
 
+        # Check if cache is enabled
+        cache_enabled = os.getenv("PII_AIRLOCK_CACHE_ENABLED", "false").lower() == "true"
+        cache = get_llm_cache() if cache_enabled else None
+
         _proxy_service = ProxyService(
             upstream_url=os.getenv("PII_AIRLOCK_UPSTREAM_URL", "https://api.openai.com"),
             api_key=os.getenv("PII_AIRLOCK_API_KEY") or os.getenv("OPENAI_API_KEY"),
@@ -63,6 +80,8 @@ def get_proxy_service() -> ProxyService:
                 "PII_AIRLOCK_INJECT_PROMPT", "true"
             ).lower() == "true",
             timeout=float(os.getenv("PII_AIRLOCK_TIMEOUT", "120")),
+            cache=cache,
+            enable_cache=cache_enabled,
         )
 
     return _proxy_service
@@ -81,6 +100,9 @@ async def lifespan(app: FastAPI):
         _store.clear()
     # Close the HTTP client if it was created
     await ProxyService.close_http_client()
+    # Shutdown cache
+    cache = get_llm_cache()
+    cache.shutdown()
 
 
 app = FastAPI(
@@ -92,6 +114,7 @@ app = FastAPI(
 
 # Add middleware
 app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(AuthenticationMiddleware)
 
 # Add rate limiting
 app.state.limiter = limiter
@@ -147,9 +170,10 @@ async def list_models():
 )
 @limiter.limit(get_rate_limit())
 async def chat_completions(
-    request: Request,
+    http_request: Request,
     body: ChatCompletionRequest,
     proxy: ProxyService = Depends(get_proxy_service),
+    tenant_id: str = Depends(get_tenant_id),
 ):
     """Create a chat completion with PII protection.
 
@@ -162,6 +186,9 @@ async def chat_completions(
     - Streaming completions (SSE)
     - Multiple choices
     - Temperature, top_p, max_tokens parameters
+    - Multi-tenant isolation
+    - Response caching (if enabled)
+    - Quota enforcement (if configured)
 
     Not yet supported:
     - Function calling
@@ -170,7 +197,7 @@ async def chat_completions(
     try:
         if body.stream:
             return StreamingResponse(
-                proxy.chat_completion_stream(body),
+                proxy.chat_completion_stream(body, tenant_id=tenant_id),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -179,8 +206,10 @@ async def chat_completions(
                 },
             )
         else:
-            response = await proxy.chat_completion(body)
+            response = await proxy.chat_completion(body, tenant_id=tenant_id)
             return response
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -660,3 +689,315 @@ async def ui_page():
     the PII anonymization functionality without using the proxy.
     """
     return UI_HTML
+
+
+# ============================================================================
+# Management API Endpoints (v1)
+# ============================================================================
+
+# Pydantic models for management API
+class TenantInfo(BaseModel):
+    """Tenant information response."""
+
+    tenant_id: str
+    name: str
+    status: str
+    rate_limit: str
+    max_ttl: int
+    settings: dict = Field(default_factory=dict)
+
+
+class APIKeyCreateRequest(BaseModel):
+    """Request to create a new API key."""
+
+    name: str = Field(..., description="Name for the API key")
+    scopes: list[str] = Field(
+        default=["llm:use", "metrics:view"],
+        description="Permission scopes",
+    )
+    expires_in_days: Optional[int] = Field(None, description="Days until expiration")
+    rate_limit: Optional[str] = Field(None, description="Rate limit override")
+
+
+class APIKeyResponse(BaseModel):
+    """API key response."""
+
+    key_id: str
+    key_prefix: str
+    tenant_id: str
+    name: str
+    status: str
+    created_at: str
+    last_used: Optional[str] = None
+    expires_at: Optional[str] = None
+    scopes: list[str]
+    rate_limit: Optional[str] = None
+    # Full key is only returned on creation
+    full_key: Optional[str] = None
+
+
+class APIKeyCreateResponse(BaseModel):
+    """Response for API key creation."""
+
+    api_key: str  # Full API key (only shown once)
+    key: APIKeyResponse
+
+
+class QuotaUsageResponse(BaseModel):
+    """Quota usage response."""
+
+    tenant_id: str
+    usage: dict[str, dict[str, int]]  # {quota_type: {period: usage}}
+    limits: dict[str, dict[str, int]] = Field(default_factory=dict)
+
+
+class CacheStatsResponse(BaseModel):
+    """Cache statistics response."""
+
+    entry_count: int
+    total_size_bytes: int
+    total_hits: int
+    avg_age_seconds: float
+    entries: list[dict]
+
+
+# ============================================================================
+# Tenant Management Endpoints
+# ============================================================================
+
+
+@app.get(
+    "/api/v1/tenants",
+    response_model=list[TenantInfo],
+    tags=["Management API"],
+)
+async def list_tenants(
+    request: Request,
+) -> list[TenantInfo]:
+    """List all tenants.
+
+    Requires authentication. Returns list of all configured tenants.
+    """
+    config = get_tenant_config()
+    tenants = config.list_tenants()
+
+    return [
+        TenantInfo(
+            tenant_id=t.tenant_id,
+            name=t.name,
+            status=t.status.value,
+            rate_limit=t.rate_limit,
+            max_ttl=t.max_ttl,
+            settings=t.settings,
+        )
+        for t in tenants
+    ]
+
+
+@app.get(
+    "/api/v1/tenants/{tenant_id}",
+    response_model=TenantInfo,
+    tags=["Management API"],
+)
+async def get_tenant_info(
+    tenant_id: str,
+    request: Request,
+) -> TenantInfo:
+    """Get information about a specific tenant."""
+    config = get_tenant_config()
+    tenant = config.get_tenant(tenant_id)
+
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    return TenantInfo(
+        tenant_id=tenant.tenant_id,
+        name=tenant.name,
+        status=tenant.status.value,
+        rate_limit=tenant.rate_limit,
+        max_ttl=tenant.max_ttl,
+        settings=tenant.settings,
+    )
+
+
+# ============================================================================
+# API Key Management Endpoints
+# ============================================================================
+
+
+@app.post(
+    "/api/v1/keys",
+    response_model=APIKeyCreateResponse,
+    tags=["Management API"],
+)
+async def create_api_key(
+    request: Request,
+    body: APIKeyCreateRequest,
+    tenant_id: str = Depends(get_tenant_id),
+) -> APIKeyCreateResponse:
+    """Create a new API key.
+
+    The created key will be associated with the current tenant.
+    The full key is only returned once during creation.
+    """
+    store = get_api_key_store()
+
+    full_key, api_key_obj = store.create_key(
+        tenant_id=tenant_id,
+        name=body.name,
+        scopes=body.scopes,
+        expires_in_days=body.expires_in_days,
+        rate_limit=body.rate_limit,
+    )
+
+    return APIKeyCreateResponse(
+        api_key=full_key,
+        key=APIKeyResponse(
+            key_id=api_key_obj.key_id,
+            key_prefix=api_key_obj.key_prefix,
+            tenant_id=api_key_obj.tenant_id,
+            name=api_key_obj.name,
+            status=api_key_obj.status.value,
+            created_at=api_key_obj.created_at_datetime.isoformat(),
+            last_used=None,
+            expires_at=api_key_obj.expires_at_datetime.isoformat()
+            if api_key_obj.expires_at
+            else None,
+            scopes=api_key_obj.scopes,
+            rate_limit=api_key_obj.rate_limit,
+        ),
+    )
+
+
+@app.get(
+    "/api/v1/keys",
+    response_model=list[APIKeyResponse],
+    tags=["Management API"],
+)
+async def list_api_keys(
+    request: Request,
+    tenant_id: str = Depends(get_tenant_id),
+) -> list[APIKeyResponse]:
+    """List API keys for the current tenant."""
+    store = get_api_key_store()
+    keys = store.list_keys(tenant_id=tenant_id)
+
+    return [
+        APIKeyResponse(
+            key_id=k.key_id,
+            key_prefix=k.key_prefix,
+            tenant_id=k.tenant_id,
+            name=k.name,
+            status=k.status.value,
+            created_at=k.created_at_datetime.isoformat(),
+            last_used=k.last_used.isoformat() if k.last_used else None,
+            expires_at=k.expires_at_datetime.isoformat() if k.expires_at else None,
+            scopes=k.scopes,
+            rate_limit=k.rate_limit,
+        )
+        for k in keys
+    ]
+
+
+@app.delete(
+    "/api/v1/keys/{key_id}",
+    tags=["Management API"],
+)
+async def revoke_api_key(
+    key_id: str,
+    request: Request,
+    tenant_id: str = Depends(get_tenant_id),
+) -> dict[str, str]:
+    """Revoke an API key."""
+    store = get_api_key_store()
+    success = store.revoke_key(key_id)
+
+    if not success:
+        raise HTTPException(status_code=404, detail="API key not found")
+
+    return {"message": "API key revoked", "key_id": key_id}
+
+
+# ============================================================================
+# Quota Management Endpoints
+# ============================================================================
+
+
+@app.get(
+    "/api/v1/quota/usage",
+    response_model=QuotaUsageResponse,
+    tags=["Management API"],
+)
+async def get_quota_usage(
+    request: Request,
+    tenant_id: str = Depends(get_tenant_id),
+) -> QuotaUsageResponse:
+    """Get current quota usage for the tenant."""
+    quota_store = get_quota_store()
+    usage = quota_store.get_usage_summary(tenant_id)
+
+    # Get limits
+    quota_config = quota_store.get_quota_config(tenant_id)
+    limits = {}
+    if quota_config:
+        for limit in quota_config.limits:
+            if limit.quota_type.value not in limits:
+                limits[limit.quota_type.value] = {}
+            limits[limit.quota_type.value][limit.period.value] = limit.limit
+
+    return QuotaUsageResponse(
+        tenant_id=tenant_id,
+        usage=usage,
+        limits=limits,
+    )
+
+
+# ============================================================================
+# Cache Management Endpoints
+# ============================================================================
+
+
+@app.get(
+    "/api/v1/cache/stats",
+    response_model=CacheStatsResponse,
+    tags=["Management API"],
+)
+async def get_cache_stats(
+    request: Request,
+    tenant_id: str = Depends(get_tenant_id),
+) -> CacheStatsResponse:
+    """Get cache statistics for the tenant."""
+    cache = get_llm_cache()
+    stats = cache.get_stats(tenant_id)
+
+    return CacheStatsResponse(**stats)
+
+
+@app.delete(
+    "/api/v1/cache",
+    tags=["Management API"],
+)
+async def clear_cache(
+    request: Request,
+    tenant_id: str = Depends(get_tenant_id),
+) -> dict[str, str]:
+    """Clear cache for the tenant."""
+    cache = get_llm_cache()
+    count = cache.invalidate_tenant(tenant_id)
+
+    return {"message": f"Cache cleared for tenant", "tenant_id": tenant_id, "entries_removed": count}
+
+
+@app.get(
+    "/api/v1/cache/stats/global",
+    response_model=CacheStatsResponse,
+    tags=["Management API"],
+)
+async def get_global_cache_stats(
+    request: Request,
+) -> CacheStatsResponse:
+    """Get global cache statistics (all tenants)."""
+    cache = get_llm_cache()
+    stats = cache.get_stats()
+
+    return CacheStatsResponse(**stats)

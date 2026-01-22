@@ -1,0 +1,59 @@
+# PII-AIRLOCK Tenant Configuration Example
+#
+# This file defines tenant configurations for multi-tenant deployments.
+# Copy to tenants.yaml and configure for your environment.
+#
+# Environment variable: PII_AIRLOCK_TENANT_CONFIG_PATH
+# Example: export PII_AIRLOCK_TENANT_CONFIG_PATH=./config/tenants.yaml
+
+tenants:
+  # Example: Team A tenant
+  - tenant_id: "team-a"
+    name: "Team A - Engineering"
+    status: "active"  # active, disabled, suspended
+    api_keys:
+      - "piiak_team-a_key1_prod"
+      - "piiak_team-a_key2_dev"
+    # Optional: Path to tenant-specific PII patterns
+    config_path: "./config/team-a-patterns.yaml"
+    # Rate limit override (requests per minute)
+    rate_limit: "100/minute"
+    # Maximum mapping TTL in seconds
+    max_ttl: 600
+    # Custom settings
+    settings:
+      department: "engineering"
+      cost_center: "cc-001"
+
+  # Example: Team B tenant
+  - tenant_id: "team-b"
+    name: "Team B - Marketing"
+    status: "active"
+    api_keys:
+      - "piiak_team-b_key1_prod"
+    rate_limit: "200/minute"
+    max_ttl: 300
+    settings:
+      department: "marketing"
+      cost_center: "cc-002"
+
+  # Example: Disabled tenant
+  - tenant_id: "team-c"
+    name: "Team C - Suspended"
+    status: "suspended"
+    api_keys: []
+    rate_limit: "50/minute"
+    max_ttl: 300
+
+# Configuration notes:
+#
+# 1. tenant_id: Unique identifier for the tenant (used in API keys, quotas, etc.)
+# 2. name: Human-readable name for display purposes
+# 3. status: Current status (active = can use API, disabled = no access, suspended = temporary)
+# 4. api_keys: List of API key prefixes associated with this tenant
+#    - Full keys are generated via management API and stored separately
+#    - Prefix format: piiak_{tenant_id}_{random}
+# 5. config_path: Optional path to tenant-specific custom PII patterns
+# 6. rate_limit: Rate limit string (format: "{count}/{period}" where period = minute/hour/day)
+# 7. max_ttl: Maximum time-to-live for PII mappings in seconds
+# 8. settings: Custom key-value pairs for tenant metadata

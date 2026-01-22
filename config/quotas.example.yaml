@@ -1,0 +1,61 @@
+# PII-AIRLOCK Quota Configuration Example
+#
+# This file defines usage quotas for tenant resource management.
+# Copy to quotas.yaml and configure for your environment.
+#
+# Environment variable: PII_AIRLOCK_QUOTA_CONFIG_PATH
+# Example: export PII_AIRLOCK_QUOTA_CONFIG_PATH=./config/quotas.yaml
+
+quotas:
+  # Example: Team A quota configuration
+  - tenant_id: "team-a"
+    # Request quotas (number of API calls)
+    requests:
+      hourly: 1000    # 1000 requests per hour
+      daily: 10000    # 10000 requests per day
+      # monthly: 100000  # Optional: monthly limit
+    # Token quotas (number of tokens processed)
+    tokens:
+      daily: 5000000  # 5 million tokens per day
+      monthly: 100000000  # 100 million tokens per month
+    # Soft limit warning threshold (percentage)
+    soft_limit_percent: 80  # Warn at 80% of hard limit
+
+  # Example: Team B quota configuration
+  - tenant_id: "team-b"
+    requests:
+      hourly: 2000
+      daily: 20000
+    tokens:
+      daily: 10000000
+      monthly: 200000000
+    soft_limit_percent: 75
+
+  # Example: Small team with lower limits
+  - tenant_id: "team-c"
+    requests:
+      daily: 1000
+    tokens:
+      daily: 500000
+    soft_limit_percent: 80
+
+# Configuration notes:
+#
+# 1. tenant_id: Must match a tenant defined in tenants.yaml
+# 2. requests: Quota for API request count
+#    - hourly: Rolling 1-hour window
+#    - daily: Calendar day (UTC)
+#    - monthly: Calendar month (UTC)
+# 3. tokens: Quota for token count (prompt + completion)
+#    - Use to control LLM API costs
+# 4. soft_limit_percent: Percentage at which to log warnings (0-100)
+#    - Useful for alerting before hard limits are hit
+#
+# Quota enforcement:
+# - When a limit is exceeded, requests are rejected with 429 status
+# - Soft limits only generate log warnings, don't block requests
+# - Usage resets automatically at period boundaries
+#
+# Monitoring:
+# - Check metrics: pii_airlock_quota_usage for current usage
+# - Audit logs contain quota exceeded events

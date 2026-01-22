@@ -1,48 +1,75 @@
+<div align="center">
+
 # PII-AIRLOCK
 
-> Make Public LLMs Private - PII protection middleware for LLM APIs
+### Make Public LLMs Private — PII Protection Middleware for LLM APIs
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/iannil/pii-airlock/releases)
-[![Tests](https://img.shields.io/badge/tests-286%20passed-brightgreen.svg)](https://github.com/iannil/pii-airlock/actions)
-[![Coverage](https://img.shields.io/badge/coverage-81%25-green.svg)](https://github.com/iannil/pii-airlock/actions)
+[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](https://github.com/pii-airlock/pii-airlock/releases)
+[![Tests](https://img.shields.io/badge/tests-170%20passed-brightgreen.svg)](https://github.com/pii-airlock/pii-airlock/actions)
+[![Coverage](https://img.shields.io/badge/coverage-82%25-green.svg)](https://github.com/pii-airlock/pii-airlock/actions)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
-[中文文档](README_zh.md) | [Documentation](docs/) | [Changelog](docs/progress/changelog.md)
+[中文文档](README_zh-CN.md) | [Documentation](docs/) | [Changelog](docs/progress/changelog.md)
+
+---
+
+**PII-AIRLOCK** is an open-source middleware/reverse proxy that protects sensitive personal information when using public LLM APIs. Deploy it between your applications and LLM providers (OpenAI, Claude, etc.) to automatically detect, anonymize, and restore PII in real-time.
+
+</div>
 
 ---
 
 ## Overview
 
-PII-AIRLOCK is an open-source middleware/reverse proxy that protects sensitive personal information when using public LLM APIs. Deploy it between your applications and LLM providers (OpenAI, Claude, etc.) to automatically detect, anonymize, and restore PII in real-time.
-
 ```
-┌─────────────────┐     ┌─────────────────────────────────────┐     ┌─────────────────┐
-│                 │     │           PII-AIRLOCK               │     │                 │
-│  Your App       │────▶│  ┌─────────┐    ┌─────────────────┐ │────▶│   OpenAI API    │
-│ (Dify/LangChain)│     │  │Anonymize│────│  Mapping Store  │ │     │   Claude API    │
-│                 │◀────│  └─────────┘    └─────────────────┘ │◀────│                 │
-└─────────────────┘     └─────────────────────────────────────┘     └─────────────────┘
+┌─────────────────┐     ┌─────────────────────────────────────────┐     ┌─────────────────┐
+│                 │     │           PII-AIRLOCK (v1.2)            │     │                 │
+│  Your App       │────▶│  ┌─────────┐    ┌─────────────────┐     │────▶│   OpenAI API    │
+│  (Dify/Flowise) │     │  │Anonymize│────│  Mapping Store  │     │     │   Claude API    │
+│                 │◀────│  └─────────┘    │   + Cache       │     │◀────│   Azure OpenAI   │
+└─────────────────┘     └─────────────────────────────────────────┘     └─────────────────┘
+                              ▲
+                         Multi-Tenant │ API Keys │ Quota
 ```
 
-## Features
+## Key Features
+
+### Core Capabilities
 
 | Feature | Description |
-| --------- | ------------- |
+|---------|-------------|
 | **Zero-Code Integration** | Just change `base_url` - fully compatible with OpenAI API format |
-| **Type-Preserving Anonymization** | Uses semantic placeholders (`<PERSON_1>`, `<PHONE_2>`) that LLMs understand |
-| **Streaming Support** | Handles SSE streaming responses with sliding window buffering |
-| **Fuzzy Matching** | Recovers PII even when LLMs modify placeholder format |
-| **Custom Rules** | Define your own PII patterns via YAML configuration |
-| **Multiple Strategies** | Placeholder, Hash, Mask, and Redact anonymization strategies |
-| **Production Ready** | Structured logging, Prometheus metrics, rate limiting, connection pooling |
-| **Web UI** | Built-in testing interface for verifying anonymization |
+| **Smart Anonymization** | Semantic placeholders (`<PERSON_1>`) that LLMs understand naturally |
+| **Streaming Support** | Handles SSE streaming with intelligent buffer for split placeholders |
+| **Fuzzy Recovery** | Recovers PII even when LLMs modify placeholder format |
+| **Custom Patterns** | Define your own PII patterns via YAML configuration |
+
+### Enterprise Features (v1.2)
+
+| Feature | Description |
+|---------|-------------|
+| **Multi-Tenancy** | Tenant isolation with dedicated configurations and rate limits |
+| **Response Caching** | LLM response caching to reduce API costs and latency |
+| **Quota Management** | Request/token quotas with hourly/daily/monthly limits |
+| **API Key Management** | Secure API key creation and lifecycle management |
+| **RBAC** | Role-based access control (Admin/Operator/Viewer/User) |
+| **Production Ready** | Structured logging, Prometheus metrics, rate limiting |
+
+### Anonymization Strategies
+
+| Strategy | Description | Example | Use Case |
+|----------|-------------|---------|----------|
+| **placeholder** | Type-based placeholders | `张三` → `<PERSON_1>` | LLM processing (default) |
+| **hash** | SHA256 hash | `张三` → `a1b2c3d4...` | Log analysis, deduplication |
+| **mask** | Partial masking | `13800138000` → `138****8000` | UI display |
+| **redact** | Complete replacement | `test@example.com` → `[REDACTED]` | Maximum privacy |
 
 ## Supported PII Types
 
 | Type | Placeholder | Example |
-| ------ | ------------- | --------- |
+|------|-------------|---------|
 | Person Name | `<PERSON_N>` | John Doe → `<PERSON_1>` |
 | Phone Number | `<PHONE_N>` | 13800138000 → `<PHONE_1>` |
 | Email | `<EMAIL_N>` | test@example.com → `<EMAIL_1>` |
@@ -51,34 +78,23 @@ PII-AIRLOCK is an open-source middleware/reverse proxy that protects sensitive p
 | IP Address | `<IP_N>` | 192.168.1.1 → `<IP_1>` |
 | Custom | Configurable | PROJ-2024-AB → `<PROJECT_CODE_1>` |
 
-## Anonymization Strategies
-
-| Strategy | Description | Example | Use Case |
-| ---------- | ------------- | --------- | ---------- |
-| **placeholder** | Replace with type-based placeholders | `张三` → `<PERSON_1>` | LLM processing (default) |
-| **hash** | Replace with SHA256 hash | `张三` → `a1b2c3d4...` | Log analysis, data deduplication |
-| **mask** | Partial masking preserving format | `13800138000` → `138****8000` | UI display, customer service |
-| **redact** | Complete replacement with marker | `test@example.com` → `[REDACTED]` | Maximum privacy, audit logs |
-
-For detailed strategy documentation, see [docs/guide/strategies.md](docs/guide/strategies.md).
-
 ## Quick Start
 
 ### Installation
 
 ```bash
 # Clone the repository
-git clone https://github.com/iannil/pii-airlock.git
+git clone https://github.com/pii-airlock/pii-airlock.git
 cd pii-airlock
 
 # Create virtual environment
 python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
 # Install dependencies
 pip install -e .
 
-# Download Chinese NLP model (optional, for Chinese support)
+# Download Chinese NLP model (optional, for Chinese PII detection)
 python -m spacy download zh_core_web_sm
 ```
 
@@ -92,9 +108,11 @@ export OPENAI_API_KEY=sk-your-api-key
 python -m pii_airlock.main
 
 # Server runs at http://localhost:8000
+# API Docs: http://localhost:8000/docs
+# Web UI: http://localhost:8000/ui
 ```
 
-### Use with OpenAI Client
+### Use with OpenAI Python Client
 
 ```python
 from openai import OpenAI
@@ -133,24 +151,34 @@ docker run -p 8000:8000 -e OPENAI_API_KEY=sk-xxx pii-airlock
 ### Environment Variables
 
 | Variable | Description | Default |
-| ---------- | ------------- | --------- |
-| `PII_AIRLOCK_UPSTREAM_URL` | Upstream LLM API URL | `https://api.openai.com` |
+|----------|-------------|---------|
+| **Basic** |
 | `OPENAI_API_KEY` | OpenAI API Key | - |
+| `PII_AIRLOCK_UPSTREAM_URL` | Upstream LLM API URL | `https://api.openai.com` |
 | `PII_AIRLOCK_PORT` | Server port | `8000` |
 | `PII_AIRLOCK_MAPPING_TTL` | Mapping expiration (seconds) | `300` |
 | `PII_AIRLOCK_INJECT_PROMPT` | Inject anti-hallucination prompt | `true` |
-| `PII_AIRLOCK_CONFIG_PATH` | Custom patterns config path | - |
-| `PII_AIRLOCK_LOG_LEVEL` | Log level (DEBUG/INFO/WARNING/ERROR) | `INFO` |
+| **Multi-Tenant (v1.2)** |
+| `PII_AIRLOCK_MULTI_TENANT_ENABLED` | Enable multi-tenant mode | `false` |
+| `PII_AIRLOCK_TENANT_CONFIG_PATH` | Path to tenants.yaml | - |
+| **Caching (v1.2)** |
+| `PII_AIRLOCK_CACHE_ENABLED` | Enable response caching | `false` |
+| `PII_AIRLOCK_CACHE_TTL` | Cache TTL (seconds) | `3600` |
+| `PII_AIRLOCK_CACHE_MAX_SIZE` | Max cache entries | `10000` |
+| **Quota (v1.2)** |
+| `PII_AIRLOCK_QUOTA_CONFIG_PATH` | Path to quotas.yaml | - |
+| **Logging** |
+| `PII_AIRLOCK_LOG_LEVEL` | Log level | `INFO` |
 | `PII_AIRLOCK_LOG_FORMAT` | Log format (json/text) | `json` |
-| `PII_AIRLOCK_RATE_LIMIT` | Rate limit configuration | `60/minute` |
+| **Rate Limiting** |
+| `PII_AIRLOCK_RATE_LIMIT` | Rate limit | `60/minute` |
 | `PII_AIRLOCK_RATE_LIMIT_ENABLED` | Enable rate limiting | `true` |
 
 ### Custom PII Patterns
 
-Create a YAML configuration file:
+Create `config/custom_patterns.yaml`:
 
 ```yaml
-# config/custom_patterns.yaml
 patterns:
   - name: employee_id
     entity_type: EMPLOYEE_ID
@@ -170,7 +198,7 @@ patterns:
       - code
 ```
 
-Then set the environment variable:
+Set the config path:
 
 ```bash
 export PII_AIRLOCK_CONFIG_PATH=./config/custom_patterns.yaml
@@ -178,33 +206,39 @@ export PII_AIRLOCK_CONFIG_PATH=./config/custom_patterns.yaml
 
 ## API Endpoints
 
+### OpenAI-Compatible API
+
 | Endpoint | Method | Description |
-| ---------- | -------- | ------------- |
-| `/v1/chat/completions` | POST | OpenAI-compatible chat completions |
+|----------|--------|-------------|
+| `/v1/chat/completions` | POST | Chat completions with PII protection |
 | `/v1/models` | GET | List available models |
-| `/health` | GET | Health check |
-| `/metrics` | GET | Prometheus metrics |
-| `/ui` | GET | Web testing interface |
-| `/api/test/anonymize` | POST | Test anonymization |
-| `/api/test/deanonymize` | POST | Test deanonymization |
 
-### Test Anonymization API
+### Management API (v1.2)
 
-```bash
-curl -X POST http://localhost:8000/api/test/anonymize \
-  -H "Content-Type: application/json" \
-  -d '{"text": "张三的电话是13800138000", "strategy": "mask"}'
-```
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| **Tenant** |
+| `/api/v1/tenants` | GET | List all tenants |
+| `/api/v1/tenants/{id}` | GET | Get tenant info |
+| **API Keys** |
+| `/api/v1/keys` | POST/GET | Create/list API keys |
+| `/api/v1/keys/{id}` | DELETE | Revoke API key |
+| **Quota** |
+| `/api/v1/quota/usage` | GET | Get quota usage |
+| **Cache** |
+| `/api/v1/cache/stats` | GET | Get cache statistics |
+| `/api/v1/cache` | DELETE | Clear cache |
+| `/api/v1/cache/stats/global` | GET | Global cache stats |
 
-Response:
-```json
-{
-  "original": "张三的电话是13800138000",
-  "anonymized": "张*的电话是138****8000",
-  "mapping": {},
-  "strategy": "mask"
-}
-```
+### Monitoring & Testing
+
+| Endpoint | Description |
+|----------|-------------|
+| `/health` | Health check |
+| `/metrics` | Prometheus metrics |
+| `/ui` | Web testing interface |
+| `/api/test/anonymize` | Test anonymization |
+| `/api/test/deanonymize` | Test deanonymization |
 
 ## Programmatic Usage
 
@@ -235,19 +269,24 @@ print(result.text)  # 张*的电话是[REDACTED]
 
 ## How It Works
 
-1. **Intercept**: Capture the incoming prompt
-2. **Anonymize**: Detect PII using NLP and replace with semantic placeholders
-3. **Map**: Store placeholder-to-original mappings with TTL
-4. **Forward**: Send sanitized prompt to upstream LLM
-5. **Deanonymize**: Replace placeholders in response with original values
-6. **Return**: Return restored response to client
+```
+1. Intercept  → Capture incoming request
+2. Anonymize  → Detect PII using NLP, replace with placeholders
+3. Check Cache→ Return cached response if available (v1.2)
+4. Check Quota → Verify quota limits (v1.2)
+5. Map       → Store placeholder-to-original mappings
+6. Forward    → Send sanitized prompt to upstream LLM
+7. Cache     → Store response for future requests (v1.2)
+8. Deanonymize→ Replace placeholders in response
+9. Return    → Return restored response to client
+```
 
 ### Handling LLM Hallucinations
 
 LLMs may modify placeholders (e.g., `<PERSON_1>` → `<Person 1>`). PII-AIRLOCK handles this with:
 
 1. **System Prompt Injection**: Instructs LLM to preserve placeholders exactly
-2. **Fuzzy Matching**: Uses flexible patterns to match modified placeholders
+2. **Fuzzy Matching**: Uses flexible regex patterns to match modified placeholders
 
 ## Development
 
@@ -284,7 +323,15 @@ pii-airlock/
 │   │   ├── proxy.py        # Proxy service logic
 │   │   ├── models.py       # Pydantic models
 │   │   ├── middleware.py   # Request logging middleware
+│   │   ├── auth_middleware.py # Authentication (v1.2)
 │   │   └── limiter.py      # Rate limiting
+│   ├── auth/               # Authentication & Authorization (v1.2)
+│   │   ├── tenant.py       # Multi-tenant support
+│   │   ├── api_key.py      # API key management
+│   │   ├── rbac.py         # Role-based access control
+│   │   └── quota.py        # Quota management
+│   ├── cache/              # Response Caching (v1.2)
+│   │   └── llm_cache.py    # LLM response cache
 │   ├── recognizers/        # PII recognizers
 │   │   ├── zh_phone.py     # Chinese phone recognizer
 │   │   ├── zh_id_card.py   # Chinese ID card recognizer
@@ -296,8 +343,11 @@ pii-airlock/
 │   ├── logging/            # Structured logging
 │   ├── metrics/            # Prometheus metrics
 │   └── config/             # Configuration loading
-├── tests/                  # Test suite (286 tests)
+├── tests/                  # Test suite (170+ tests)
 ├── config/                 # Configuration examples
+│   ├── custom_patterns.example.yaml
+│   ├── tenants.example.yaml
+│   └── quotas.example.yaml
 ├── docs/                   # Documentation
 ├── Dockerfile
 ├── docker-compose.yml
@@ -306,12 +356,19 @@ pii-airlock/
 
 ## Roadmap
 
-- [ ] Multi-tenancy support
-- [ ] Audit logging
+### Upcoming (v1.3)
+
+- [ ] Enhanced audit logging
 - [ ] OpenTelemetry integration
-- [ ] Distributed rate limiting
 - [ ] Kubernetes deployment guide
-- [ ] More language support (Japanese, Korean, etc.)
+- [ ] Webhook notifications for quota alerts
+
+### Future (v2.0)
+
+- [ ] Go-based proxy layer for performance
+- [ ] Distributed caching with Redis Cluster
+- [ ] Support for more LLM providers
+- [ ] Additional language support (Japanese, Korean, etc.)
 
 ## Contributing
 
@@ -325,10 +382,11 @@ We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.
 
 ## Use Cases
 
-- **Enterprise Compliance**: Use GPT-4/Claude while meeting data protection regulations (GDPR, CCPA, PIPL)
-- **Low-Code Platforms**: Add as a gateway for Dify, FastGPT, LangFlow
+- **Enterprise Compliance**: Use GPT-4/Claude while meeting GDPR, CCPA, PIPL requirements
+- **Low-Code Platforms**: Add as a gateway for Dify, Flowise, LangFlow
 - **Healthcare/Finance**: Process sensitive data with cloud LLMs safely
 - **Development**: Test LLM applications without exposing real PII
+- **Multi-Team**: Shared infrastructure with isolated configurations and quotas
 
 ## License
 
@@ -341,10 +399,12 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [FastAPI](https://fastapi.tiangolo.com/) - Web framework
 - [OpenAI](https://openai.com/) - LLM API
 
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=iannil/pii-airlock&type=Date)](https://star-history.com/#iannil/pii-airlock&Date)
-
 ---
 
+<div align="center">
+
 **Made with ❤️ by the PII-AIRLOCK team**
+
+[⭐ Star us on GitHub](https://github.com/pii-airlock/pii-airlock) — it helps!
+
+</div>
