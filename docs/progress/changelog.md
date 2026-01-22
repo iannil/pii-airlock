@@ -1,8 +1,79 @@
 # PII-AIRLOCK 项目进展记录
 
-> 最后更新：2026-01-21
+> 最后更新：2026-01-22
 
-## 当前状态：Phase 5 已完成
+## 当前状态：v1.1.0 已发布
+
+---
+
+## 进展时间线
+
+### 2026-01-22 - v1.1.0 多策略脱敏功能发布
+
+**完成事项**：
+- [x] 版本号更新至 1.1.0
+- [x] 实现 4 种脱敏策略 (Placeholder, Hash, Mask, Redact)
+- [x] API 支持请求级别策略参数 (`strategy`, `entity_strategies`)
+- [x] Web UI 添加策略选择功能
+- [x] 创建策略使用文档 (`docs/guide/strategies.md`)
+- [x] 更新 README 添加策略说明章节
+- [x] 测试覆盖率提升至 81% (286 个测试)
+
+**技术细节**：
+
+**A. 策略系统** (`core/strategies.py`)：
+- `PlaceholderStrategy`: 占位符策略 (默认)，支持 LLM 处理和回填
+- `HashStrategy`: SHA256 哈希策略，支持日志分析和去重
+- `MaskStrategy`: 掩码策略，保留格式特征，支持显示场景
+- `RedactStrategy`: 完全替换策略，最高隐私保护
+- `StrategyConfig`: 支持按实体类型配置不同策略
+- `StrategyType` 枚举：PLACEHOLDER, HASH, MASK, REDACT
+
+**B. API 更新**：
+- `TestAnonymizeRequest` 新增 `strategy` 和 `entity_strategies` 参数
+- `TestAnonymizeResponse` 新增 `strategy` 字段返回使用的策略
+- `/api/test/anonymize` 支持动态切换策略
+
+**C. Web UI 更新**：
+- 新增策略下拉选择框
+- 实时显示当前策略说明
+- 结果页面显示使用的策略标识
+- 响应式设计优化
+
+**D. 配置方式**：
+```python
+# API 请求级别
+curl -X POST /api/test/anonymize -d '{"text": "...", "strategy": "mask"}'
+
+# 环境变量配置
+export PII_AIRLOCK_STRATEGY_PERSON=mask
+export PII_AIRLOCK_STRATEGY_PHONE=redact
+
+# 代码级别
+from pii_airlock.core.strategies import StrategyConfig, StrategyType
+config = StrategyConfig({"PERSON": StrategyType.MASK})
+anonymizer = Anonymizer(strategy_config=config)
+```
+
+**策略对比表**：
+| 策略 | 支持回填 | 保留类型 | 保留格式 | 隐私级别 | 主要用途 |
+|------|----------|----------|----------|----------|----------|
+| placeholder | ✅ | ✅ | ❌ | 中 | LLM 处理 |
+| hash | ✅ | ❌ | ❌ | 高 | 日志分析 |
+| mask | ❌ | ❌ | ✅ | 中 | 显示场景 |
+| redact | ❌ | ❌ | ❌ | 最高 | 审计日志 |
+
+**产出物**：
+- `pyproject.toml` - 版本号更新为 1.1.0
+- `src/pii_airlock/core/strategies.py` - 策略系统实现
+- `src/pii_airlock/api/models.py` - 添加策略参数模型
+- `src/pii_airlock/api/routes.py` - 支持请求级策略 + Web UI 更新
+- `docs/guide/strategies.md` - 策略使用文档
+- `README.md` - 添加策略说明章节
+
+---
+
+### 2026-01-21 - Phase 5 生产优化完成
 
 核心脱敏引擎、代理服务、流式处理、自定义规则配置、Web UI 测试界面和生产优化已完成。
 

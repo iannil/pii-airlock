@@ -18,6 +18,7 @@ docs/
 ### 设计文档
 - [技术架构设计](design/architecture.md) - 系统架构、核心流程、技术栈
 - [开发路线图](design/roadmap.md) - MVP 计划、迭代规划
+- [部署指南](design/deployment.md) - 部署方式、环境变量、监控配置
 
 ### 进展追踪
 - [变更日志](progress/changelog.md) - 项目进展时间线

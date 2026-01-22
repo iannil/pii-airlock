@@ -4,10 +4,31 @@ Chinese Person Name Recognizer
 Leverages spaCy's Chinese NER model for person name detection.
 """
 
+import os
 from typing import Optional
 
 from presidio_analyzer import EntityRecognizer, RecognizerResult
 from presidio_analyzer.nlp_engine import NlpArtifacts
+
+
+class ChinesePersonRecognizerConfig:
+    """Configuration for Chinese person name recognizer.
+
+    Scoring parameters can be overridden via environment variables:
+    - PII_AIRLOCK_PERSON_BASE_SCORE: Base confidence score (default: 0.85)
+    - PII_AIRLOCK_PERSON_SURNAME_BOOST: Score boost for common surnames (default: 0.1)
+    - PII_AIRLOCK_PERSON_FULL_NAME_BOOST: Score boost for typical name length (default: 0.05)
+    - PII_AIRLOCK_PERSON_MAX_SCORE: Maximum confidence score (default: 0.95)
+    """
+
+    BASE_SCORE: float = float(os.getenv("PII_AIRLOCK_PERSON_BASE_SCORE", "0.85"))
+    SURNAME_BOOST: float = float(os.getenv("PII_AIRLOCK_PERSON_SURNAME_BOOST", "0.1"))
+    FULL_NAME_BOOST: float = float(os.getenv("PII_AIRLOCK_PERSON_FULL_NAME_BOOST", "0.05"))
+    MAX_SCORE: float = float(os.getenv("PII_AIRLOCK_PERSON_MAX_SCORE", "0.95"))
+
+    # Typical Chinese name length range
+    MIN_NAME_LENGTH: int = int(os.getenv("PII_AIRLOCK_PERSON_MIN_NAME_LENGTH", "2"))
+    MAX_NAME_LENGTH: int = int(os.getenv("PII_AIRLOCK_PERSON_MAX_NAME_LENGTH", "4"))
 
 
 class ChinesePersonRecognizer(EntityRecognizer):
@@ -82,19 +103,27 @@ class ChinesePersonRecognizer(EntityRecognizer):
         for entity in nlp_artifacts.entities:
             if entity.label_ in ("PERSON", "PER"):
                 # Calculate confidence based on context
-                score = 0.85  # Base score from spaCy
+                score = ChinesePersonRecognizerConfig.BASE_SCORE
 
                 # Get entity text
                 entity_text = text[entity.start_char : entity.end_char]
 
                 # Boost score if starts with common surname
                 if entity_text and entity_text[0] in self.COMMON_SURNAMES:
-                    score = min(0.95, score + 0.1)
+                    score = min(
+                        ChinesePersonRecognizerConfig.MAX_SCORE,
+                        score + ChinesePersonRecognizerConfig.SURNAME_BOOST,
+                    )
 
                 # Adjust for name length (2-4 chars is typical for Chinese names)
                 name_len = len(entity_text)
-                if 2 <= name_len <= 4:
-                    score = min(0.95, score + 0.05)
+                min_len = ChinesePersonRecognizerConfig.MIN_NAME_LENGTH
+                max_len = ChinesePersonRecognizerConfig.MAX_NAME_LENGTH
+                if min_len <= name_len <= max_len:
+                    score = min(
+                        ChinesePersonRecognizerConfig.MAX_SCORE,
+                        score + ChinesePersonRecognizerConfig.FULL_NAME_BOOST,
+                    )
 
                 results.append(
                     RecognizerResult(

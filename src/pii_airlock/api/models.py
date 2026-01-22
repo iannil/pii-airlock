@@ -116,6 +116,14 @@ class TestAnonymizeRequest(BaseModel):
     """Request body for test anonymization endpoint."""
 
     text: str = Field(..., description="Text to anonymize")
+    strategy: Optional[str] = Field(
+        None,
+        description="Anonymization strategy: placeholder, hash, mask, redact",
+    )
+    entity_strategies: Optional[dict[str, str]] = Field(
+        None,
+        description="Per-entity strategy mapping, e.g., {'PERSON': 'mask', 'PHONE': 'redact'}",
+    )
 
 
 class TestAnonymizeResponse(BaseModel):
@@ -126,6 +134,7 @@ class TestAnonymizeResponse(BaseModel):
     mapping: dict[str, str] = Field(
         ..., description="Mapping from placeholder to original value"
     )
+    strategy: str = Field(..., description="The anonymization strategy used")
 
 
 class TestDeanonymizeRequest(BaseModel):

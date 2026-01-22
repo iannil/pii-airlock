@@ -2,19 +2,19 @@
 
 > 文档版本：v1.0
 > 创建日期：2026-01-21
-> 状态：规划中
+> 状态：MVP 已完成
 
 ## MVP 开发计划
 
-### Phase 1: 核心引擎
+### Phase 1: 核心引擎 ✅
 
 **目标**：实现 PII 识别与脱敏的核心闭环
 
 **任务清单**：
-- [ ] 集成 Microsoft Presidio
-- [ ] 实现 `Text → Anonymized Text → Deanonymized Text` 闭环
-- [ ] 支持基础 PII 类型：姓名、邮箱、电话
-- [ ] 编写核心引擎单元测试
+- [x] 集成 Microsoft Presidio
+- [x] 实现 `Text → Anonymized Text → Deanonymized Text` 闭环
+- [x] 支持基础 PII 类型：姓名、邮箱、电话
+- [x] 编写核心引擎单元测试
 
 **交付物**：
 - `src/core/anonymizer.py` - 脱敏引擎
@@ -23,15 +23,15 @@
 
 ---
 
-### Phase 2: 代理服务
+### Phase 2: 代理服务 ✅
 
 **目标**：搭建 OpenAI API 兼容的代理层
 
 **任务清单**：
-- [ ] 搭建 FastAPI 服务器
-- [ ] 实现 `/v1/chat/completions` 接口透传
-- [ ] 接入 Redis 存储映射关系
-- [ ] 实现请求/响应的脱敏和回填流程
+- [x] 搭建 FastAPI 服务器
+- [x] 实现 `/v1/chat/completions` 接口透传
+- [x] 接入 Redis 存储映射关系
+- [x] 实现请求/响应的脱敏和回填流程
 
 **交付物**：
 - `src/api/routes.py` - API 路由
@@ -41,15 +41,15 @@
 
 ---
 
-### Phase 3: 流式处理与优化
+### Phase 3: 流式处理与优化 ✅
 
 **目标**：支持 SSE 流式响应
 
 **任务清单**：
-- [ ] 实现滑动窗口缓冲机制
-- [ ] 攻克 SSE 流式替换问题
-- [ ] 编写 Dockerfile
-- [ ] 完善 docker-compose.yml，确保一行命令启动
+- [x] 实现滑动窗口缓冲机制
+- [x] 攻克 SSE 流式替换问题
+- [x] 编写 Dockerfile
+- [x] 完善 docker-compose.yml，确保一行命令启动
 
 **交付物**：
 - `src/streaming/buffer.py` - 滑动窗口实现
@@ -58,19 +58,39 @@
 
 ---
 
-### Phase 4: 规则配置与 UI
+### Phase 4: 规则配置与 UI ✅
 
 **目标**：提供配置化能力和测试界面
 
 **任务清单**：
-- [ ] 实现自定义正则配置 (`regex.yaml`)
-- [ ] 提供简单的 Web UI 测试脱敏效果
-- [ ] 编写用户文档
+- [x] 实现自定义正则配置 (`regex.yaml`)
+- [x] 提供简单的 Web UI 测试脱敏效果
+- [x] 编写用户文档
 
 **交付物**：
 - `config/regex.yaml` - 自定义规则配置
 - `src/ui/` - Web UI 组件
 - `docs/user-guide.md` - 用户指南
+
+---
+
+### Phase 5: 生产优化 ✅
+
+**目标**：生产级监控、限流和性能优化
+
+**任务清单**：
+- [x] 实现结构化日志 (JSON 格式)
+- [x] 实现 Prometheus 指标收集
+- [x] 实现 API 限流 (令牌桶算法)
+- [x] 优化 HTTP 连接池
+- [x] 优化 Presidio Analyzer 单例模式
+- [x] 实现 MemoryStore 后台清理线程
+
+**交付物**：
+- `src/logging/setup.py` - 日志配置
+- `src/metrics/collectors.py` - Prometheus 指标
+- `src/api/middleware.py` - 请求日志中间件
+- `src/api/limiter.py` - API 限流配置
 
 ---
 

@@ -14,8 +14,8 @@ COPY src/ src/
 # Install Python dependencies
 RUN pip install --no-cache-dir .
 
-# Download spaCy Chinese model
-RUN python -m spacy download zh_core_web_trf
+# Download spaCy Chinese model (lightweight version for production)
+RUN python -m spacy download zh_core_web_sm
 
 # Expose port
 EXPOSE 8000

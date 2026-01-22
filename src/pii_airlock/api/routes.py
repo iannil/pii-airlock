@@ -33,6 +33,7 @@ from pii_airlock.storage.memory_store import MemoryStore
 from pii_airlock.core.anonymizer import Anonymizer
 from pii_airlock.core.deanonymizer import Deanonymizer
 from pii_airlock.core.mapping import PIIMapping
+from pii_airlock.core.strategies import StrategyConfig, StrategyType, get_strategy
 from pii_airlock.logging.setup import get_logger, setup_logging
 
 # Initialize logging
@@ -199,27 +200,6 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     )
 
 
-# Create router for modular import
-from fastapi import APIRouter
-
-router = APIRouter()
-
-
-@router.get("/health", response_model=HealthResponse)
-async def router_health():
-    """Health check (router version)."""
-    return await health_check()
-
-
-@router.post("/v1/chat/completions")
-async def router_chat_completions(
-    request: ChatCompletionRequest,
-    proxy: ProxyService = Depends(get_proxy_service),
-):
-    """Chat completions (router version)."""
-    return await chat_completions(request, proxy)
-
-
 # ============================================================================
 # Test API Endpoints
 # ============================================================================
@@ -249,8 +229,55 @@ async def test_anonymize(request: TestAnonymizeRequest):
 
     This endpoint allows testing the PII detection and anonymization
     functionality directly, without forwarding to an upstream LLM.
+
+    Query parameters:
+        strategy: Optional anonymization strategy (placeholder, hash, mask, redact)
+        entity_strategies: Optional per-entity strategy mapping
     """
-    anonymizer = get_test_anonymizer()
+    # Build strategy configuration from request
+    strategy_config: StrategyConfig | None = None
+    strategy_used = "placeholder"
+
+    if request.strategy:
+        try:
+            strategy_type = StrategyType(request.strategy.lower())
+            # Apply this strategy to all entities
+            strategy_config = StrategyConfig(
+                strategies={
+                    "PERSON": strategy_type,
+                    "PHONE_NUMBER": strategy_type,
+                    "EMAIL_ADDRESS": strategy_type,
+                    "CREDIT_CARD": strategy_type,
+                    "ID_CARD": strategy_type,
+                    "ZH_ID_CARD": strategy_type,
+                    "IP_ADDRESS": strategy_type,
+                }
+            )
+            strategy_used = strategy_type.value
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid strategy: {request.strategy}. Must be one of: placeholder, hash, mask, redact",
+            )
+    elif request.entity_strategies:
+        try:
+            strategies = {}
+            for entity_type, strat_name in request.entity_strategies.items():
+                strategies[entity_type] = StrategyType(strat_name.lower())
+            strategy_config = StrategyConfig(strategies=strategies)
+            strategy_used = "custom"
+        except ValueError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid strategy in entity_strategies: {e}",
+            )
+
+    # Create anonymizer with the requested strategy or use default
+    if strategy_config:
+        anonymizer = Anonymizer(strategy_config=strategy_config)
+    else:
+        anonymizer = get_test_anonymizer()
+
     result = anonymizer.anonymize(request.text)
 
     return TestAnonymizeResponse(
@@ -260,6 +287,7 @@ async def test_anonymize(request: TestAnonymizeRequest):
             entry.placeholder: entry.original_value
             for entry in result.mapping._entries
         },
+        strategy=strategy_used,
     )
 
 
@@ -333,6 +361,29 @@ UI_HTML = """<!DOCTYPE html>
             margin-bottom: 8px;
             color: #444;
         }
+        .input-group {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+        .input-group > div {
+            flex: 1;
+        }
+        select {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            font-family: inherit;
+            background: white;
+            cursor: pointer;
+        }
+        select:focus {
+            outline: none;
+            border-color: #4a90d9;
+            box-shadow: 0 0 0 3px rgba(74, 144, 217, 0.1);
+        }
         textarea {
             width: 100%;
             height: 120px;
@@ -387,6 +438,16 @@ UI_HTML = """<!DOCTYPE html>
             word-break: break-all;
             white-space: pre-wrap;
         }
+        .strategy-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            background: #4a90d9;
+            color: white;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
         .mapping-table {
             width: 100%;
             border-collapse: collapse;
@@ -427,12 +488,44 @@ UI_HTML = """<!DOCTYPE html>
             border-left-color: #dc3545;
             color: #dc3545;
         }
+        .help-text {
+            font-size: 12px;
+            color: #888;
+            margin-top: 4px;
+        }
+        .strategy-info {
+            background: #f0f7ff;
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 16px;
+            font-size: 13px;
+        }
+        .strategy-info strong {
+            color: #4a90d9;
+        }
     </style>
 </head>
 <body>
     <h1>PII-AIRLOCK 测试界面</h1>
 
     <div class="container">
+        <div class="input-group">
+            <div>
+                <label for="strategy">脱敏策略</label>
+                <select id="strategy">
+                    <option value="placeholder">占位符 (placeholder)</option>
+                    <option value="hash">哈希 (hash)</option>
+                    <option value="mask">掩码 (mask)</option>
+                    <option value="redact">完全替换 (redact)</option>
+                </select>
+                <div class="help-text">选择脱敏策略以查看不同效果</div>
+            </div>
+        </div>
+
+        <div class="strategy-info" id="strategy-info">
+            <strong>占位符策略</strong>: 将敏感信息替换为类型化的占位符（如 &lt;PERSON_1&gt;），适合 LLM 处理
+        </div>
+
         <label for="input">输入文本</label>
         <textarea id="input" placeholder="输入包含敏感信息的文本进行测试...">张三的电话是13800138000，邮箱是test@example.com，身份证号是110101199003077516</textarea>
 
@@ -443,14 +536,14 @@ UI_HTML = """<!DOCTYPE html>
     </div>
 
     <div id="results" class="container hidden">
-        <label>脱敏结果</label>
+        <label>脱敏结果 <span class="strategy-badge" id="result-strategy"></span></label>
         <div class="result" id="anonymized"></div>
 
         <label style="margin-top: 20px;">映射关系</label>
         <table class="mapping-table">
             <thead>
                 <tr>
-                    <th>占位符</th>
+                    <th>占位符 / 替换值</th>
                     <th>原始值</th>
                 </tr>
             </thead>
@@ -467,12 +560,28 @@ UI_HTML = """<!DOCTYPE html>
     </div>
 
     <script>
+        const strategyDescriptions = {
+            placeholder: '<strong>占位符策略</strong>: 将敏感信息替换为类型化的占位符（如 &lt;PERSON_1&gt;），适合 LLM 处理，支持回填',
+            hash: '<strong>哈希策略</strong>: 使用 SHA256 哈希替换原始值，相同输入产生相同哈希，适合日志分析和数据去重',
+            mask: '<strong>掩码策略</strong>: 部分隐藏敏感信息（如 138****8000），保留格式特征，适合显示场景',
+            redact: '<strong>完全替换策略</strong>: 将所有敏感信息替换为固定标记 [REDACTED]，提供最高隐私保护'
+        };
+
+        function updateStrategyInfo() {
+            const strategy = document.getElementById('strategy').value;
+            document.getElementById('strategy-info').innerHTML = strategyDescriptions[strategy];
+        }
+
+        document.getElementById('strategy').addEventListener('change', updateStrategyInfo);
+
         async function anonymize() {
             const text = document.getElementById('input').value.trim();
             if (!text) {
                 showError('请输入要测试的文本');
                 return;
             }
+
+            const strategy = document.getElementById('strategy').value;
 
             document.body.classList.add('loading');
             hideError();
@@ -481,7 +590,7 @@ UI_HTML = """<!DOCTYPE html>
                 const res = await fetch('/api/test/anonymize', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({text})
+                    body: JSON.stringify({text, strategy})
                 });
 
                 if (!res.ok) {
@@ -492,6 +601,7 @@ UI_HTML = """<!DOCTYPE html>
                 const data = await res.json();
 
                 document.getElementById('anonymized').textContent = data.anonymized;
+                document.getElementById('result-strategy').textContent = data.strategy;
 
                 const mappingBody = document.getElementById('mapping');
                 mappingBody.innerHTML = '';

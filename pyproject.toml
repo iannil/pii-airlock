@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pii-airlock"
-version = "0.1.0"
+version = "1.1.0"
 description = "PII protection middleware for public LLM APIs - Make Public LLMs Private"
 readme = "README.md"
 license = "MIT"

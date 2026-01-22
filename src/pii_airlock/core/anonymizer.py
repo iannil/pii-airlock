@@ -23,6 +23,7 @@ from presidio_anonymizer.entities import OperatorConfig, OperatorResult
 
 from pii_airlock.core.mapping import PIIMapping
 from pii_airlock.core.counter import PlaceholderCounter
+from pii_airlock.core.strategies import StrategyConfig, StrategyType, get_strategy
 from pii_airlock.recognizers.registry import create_analyzer_with_chinese_support
 
 
@@ -119,10 +120,12 @@ class Anonymizer:
 
     This class orchestrates PII detection and replacement with
     type-preserving placeholders like <PERSON_1>, <PHONE_2>, etc.
+    Also supports multiple anonymization strategies via StrategyConfig.
 
     Attributes:
         language: Primary language for NLP analysis.
         score_threshold: Minimum confidence score for PII detection.
+        strategy_config: Configuration for anonymization strategies.
 
     Example:
         >>> anonymizer = Anonymizer()
@@ -134,6 +137,14 @@ class Anonymizer:
 
         # With custom patterns:
         >>> anonymizer = Anonymizer(config_path="config/custom_patterns.yaml")
+
+        # With mask strategy for phone numbers:
+        >>> from pii_airlock.core.strategies import StrategyConfig, StrategyType
+        >>> strategy_config = StrategyConfig({"PHONE_NUMBER": StrategyType.MASK})
+        >>> anonymizer = Anonymizer(strategy_config=strategy_config)
+        >>> result = anonymizer.anonymize("电话是13800138000")
+        >>> print(result.text)
+        电话是138****8000
     """
 
     # Default supported entities
@@ -165,6 +176,8 @@ class Anonymizer:
         config_path: Optional[Union[Path, str]] = None,
         custom_entity_types: Optional[dict[str, str]] = None,
         use_shared_analyzer: bool = True,
+        strategy_config: Optional[StrategyConfig] = None,
+        load_strategies_from_env: bool = False,
     ) -> None:
         """Initialize the anonymizer.
 
@@ -179,9 +192,20 @@ class Anonymizer:
                 Example: {"EMPLOYEE_ID": "EMPLOYEE", "PROJECT_CODE": "PROJECT"}
             use_shared_analyzer: If True and no analyzer is provided, use the
                 shared singleton analyzer for better performance. Default: True.
+            strategy_config: Configuration for anonymization strategies per entity type.
+            load_strategies_from_env: If True, load strategy configuration from
+                environment variables (PII_AIRLOCK_STRATEGY_*).
         """
         self.language = language
         self.score_threshold = score_threshold
+
+        # Initialize strategy configuration
+        if load_strategies_from_env:
+            self.strategy_config = StrategyConfig.from_env()
+        elif strategy_config:
+            self.strategy_config = strategy_config
+        else:
+            self.strategy_config = StrategyConfig()
 
         # Initialize entity mappings (copy defaults to avoid mutating class attributes)
         self.SUPPORTED_ENTITIES = list(self.DEFAULT_ENTITIES)
@@ -286,25 +310,38 @@ class Anonymizer:
         # Step 4: Sort results by position (reverse order for replacement)
         sorted_results = sorted(filtered_results, key=lambda x: x.start, reverse=True)
 
-        # Step 4: Replace PII with placeholders (from end to start to preserve positions)
+        # Step 4: Replace PII using configured strategies (from end to start to preserve positions)
         anonymized_text = text
         for result in sorted_results:
             original_value = text[result.start : result.end]
             placeholder_type = self.ENTITY_TYPE_MAP.get(result.entity_type, result.entity_type)
 
-            # Check if this exact value already has a placeholder
+            # Get the strategy for this entity type
+            strategy_type = self.strategy_config.get_strategy(result.entity_type)
+            strategy = get_strategy(strategy_type)
+
+            # Check if this exact value already has a placeholder/hash
             existing = mapping.get_placeholder(placeholder_type, original_value)
             if existing:
-                placeholder = existing
+                replacement = existing
             else:
-                # Generate new placeholder
+                # Apply the strategy to generate replacement
                 index = counter.next(placeholder_type)
-                placeholder = f"<{placeholder_type}_{index}>"
-                mapping.add(placeholder_type, original_value, placeholder)
+                strategy_result = strategy.anonymize(
+                    value=original_value,
+                    entity_type=placeholder_type,
+                    index=index,
+                    context={"salt": result.entity_type},
+                )
+                replacement = strategy_result.text
+
+                # Only add to mapping if the strategy supports deanonymization
+                if strategy_result.can_deanonymize:
+                    mapping.add(placeholder_type, original_value, replacement)
 
             # Replace in text
             anonymized_text = (
-                anonymized_text[: result.start] + placeholder + anonymized_text[result.end :]
+                anonymized_text[: result.start] + replacement + anonymized_text[result.end :]
             )
 
         return AnonymizationResult(

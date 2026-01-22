@@ -1,0 +1,58 @@
+# PII-AIRLOCK Anonymization Strategies Configuration
+# Copy this file to strategies.yaml and configure as needed
+#
+# Available strategies:
+# - placeholder: Replace with type-based placeholders (e.g., <PERSON_1>)
+# - hash: Replace with SHA256 hash
+# - mask: Partially mask with asterisks (e.g., 138****8000)
+# - redact: Completely replace with [REDACTED]
+
+strategies:
+  # Person names
+  PERSON: placeholder
+
+  # Phone numbers
+  PHONE_NUMBER: mask
+  PHONE: mask
+
+  # Email addresses
+  EMAIL_ADDRESS: redact
+  EMAIL: redact
+
+  # ID cards
+  ZH_ID_CARD: mask
+  ID_CARD: mask
+
+  # Credit cards
+  CREDIT_CARD: mask
+
+  # IP addresses
+  IP_ADDRESS: mask
+  IP: mask
+
+  # Custom entity types (examples)
+  # EMPLOYEE_ID: hash
+  # PROJECT_CODE: placeholder
+  # PASSPORT: mask
+
+# Strategy explanations:
+#
+# placeholder:
+#   - Best for: LLM processing where format preservation matters
+#   - Example: "张三" -> "<PERSON_1>"
+#   - Deanonymization: Supported
+#
+# hash:
+#   - Best for: Logging and analytics where consistency is needed
+#   - Example: "张三" -> "a1b2c3d4e5f6..."
+#   - Deanonymization: Supported with hash mapping
+#
+# mask:
+#   - Best for: Display purposes where partial info is useful
+#   - Example: "13800138000" -> "138****8000"
+#   - Deanonymization: Not supported
+#
+# redact:
+#   - Best for: Maximum privacy protection
+#   - Example: "test@example.com" -> "[REDACTED]"
+#   - Deanonymization: Not supported
