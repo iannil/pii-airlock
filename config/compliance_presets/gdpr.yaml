@@ -1,0 +1,133 @@
+# GDPR Compliance Preset
+# 欧盟通用数据保护条例 (EU General Data Protection Regulation) 合规配置
+#
+# GDPR 要点:
+# - 最小化数据收集原则
+# - 数据主体有权访问、更正、删除其数据
+# - 数据必须合法、公正、透明地处理
+# - 实施数据保护设计 (Privacy by Design)
+
+name: "GDPR Compliance"
+description: "欧盟通用数据保护条例合规配置，适用于处理欧盟公民数据"
+version: "1.0"
+region: ["EU", "EEA"]
+language: ["en", "de", "fr", "es", "it", "nl", "pl", "sv"]
+
+# PII 类型定义 - GDPR 关注的个人数据类型
+pii_types:
+  - PERSON               # 姓名
+  - EMAIL_ADDRESS        # 邮箱
+  - PHONE_NUMBER         # 电话
+  - IP_ADDRESS           # IP地址（GDPR 视为个人数据）
+  - LOCATION             # 位置信息
+  - DATE_TIME            # 日期（出生日期等）
+  - URL                  # URL（可能包含标识符）
+  - IBAN_CODE            # 银行账户
+  - CREDIT_CARD          # 信用卡
+  - DRIVER_LICENSE       # 驾照
+  - PASSPORT             # 护照
+  - NRP                  # 国家身份证号码
+  - SSN                  # 社会保障号
+
+# 脱敏策略配置
+strategies:
+  # 默认策略 - 使用语义保持替换，让LLM正常处理
+  default: "synthetic"
+
+  # 姓名使用合成替换，保持语义
+  PERSON: "synthetic"
+  NRP: "synthetic"
+
+  # 联系方式 - 使用掩码保留部分可读性
+  EMAIL_ADDRESS: "mask"
+  PHONE_NUMBER: "mask"
+
+  # 位置信息完全删除（GDPR 严格要求）
+  LOCATION: "redact"
+  IP_ADDRESS: "redact"
+
+  # 金融信息 - 掩码处理
+  CREDIT_CARD: "mask"
+  IBAN_CODE: "mask"
+
+  # 身份证件 - 掩码处理
+  PASSPORT: "mask"
+  DRIVER_LICENSE: "mask"
+  SSN: "redact"  # 社保号完全删除
+
+  # URL 和日期 - 占位符
+  URL: "placeholder"
+  DATE_TIME: "placeholder"
+
+# 数据保留策略
+retention:
+  # 映射关系TTL - GDPR 最小化原则
+  mapping_ttl: 300  # 5分钟自动过期
+
+  # 审计日志保留期
+  audit_retention_days: 365
+
+  # 是否记录敏感内容
+  log_sensitive_content: false
+
+# 防幻觉配置
+anonymization:
+  # 注入防幻觉提示
+  inject_prompt: true
+
+  # 防幻觉提示内容
+  inject_prompt_template: |
+    [SYSTEM NOTICE] This conversation contains anonymized personal data per GDPR compliance.
+    - Placeholders like <PERSON_1>, <EMAIL_1> represent anonymized GDPR-regulated data.
+    - Do NOT attempt to reverse-engineer or guess original values.
+    - Respond naturally to the anonymized content.
+    - Maintain placeholders exactly as provided in your responses.
+
+# 合规检查规则
+compliance_rules:
+  # 数据最小化检查
+  data_minimization:
+    enabled: true
+    warn_on_excessive_pii: true
+
+  # 同意管理提醒
+  consent_management:
+    enabled: true
+    log_consent_events: true
+
+  # 数据主体权利
+  subject_rights:
+    # 支持数据导出
+    export_enabled: true
+    # 支持数据删除（映射清理）
+    deletion_enabled: true
+
+# 风险评分配置
+risk_scoring:
+  # 高风险 PII 类型
+  high_risk_types:
+    - SSN
+    - PASSPORT
+    - DRIVER_LICENSE
+    - IBAN_CODE
+
+  # 中风险 PII 类型
+  medium_risk_types:
+    - EMAIL_ADDRESS
+    - PHONE_NUMBER
+    - IP_ADDRESS
+    - LOCATION
+
+# 自定义模式（GDPR 特定）
+custom_patterns:
+  - name: eu_vat_number
+    entity_type: EU_VAT
+    regex: "[A-Z]{2}[0-9A-Z]{8,12}"
+    score: 0.85
+    context: ["VAT", "tax", "税号"]
+
+  - name: eu_health_insurance
+    entity_type: HEALTH_INSURANCE
+    regex: "[A-Z]{2}[0-9]{10}"
+    score: 0.8
+    context: ["health", "insurance", "医疗保险"]

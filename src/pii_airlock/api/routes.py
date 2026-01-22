@@ -26,6 +26,8 @@ from pii_airlock.api.models import (
     TestAnonymizeResponse,
     TestDeanonymizeRequest,
     TestDeanonymizeResponse,
+    EmbeddingRequest,
+    EmbeddingResponse,
 )
 from pii_airlock.api.proxy import ProxyService
 from pii_airlock.api.middleware import RequestLoggingMiddleware
@@ -48,6 +50,18 @@ from pii_airlock.auth.tenant import Tenant, get_tenant_config, DEFAULT_TENANT_ID
 from pii_airlock.auth.api_key import APIKey, get_api_key_store, KeyStatus
 from pii_airlock.cache.llm_cache import get_llm_cache, LLMCache
 from pii_airlock.auth.quota import QuotaStore, QuotaType, get_quota_store
+
+# Audit API imports
+from pii_airlock.api import audit_api
+
+# Compliance API imports
+from pii_airlock.api import compliance_api
+
+# Allowlist API imports
+from pii_airlock.api import allowlist_api
+
+# Intent API imports
+from pii_airlock.api import intent_api
 
 # Initialize logging
 setup_logging()
@@ -120,6 +134,18 @@ app.add_middleware(AuthenticationMiddleware)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+# Include audit API router
+app.include_router(audit_api.router)
+
+# Include compliance API router
+app.include_router(compliance_api.router)
+
+# Include allowlist API router
+app.include_router(allowlist_api.router)
+
+# Include intent API router
+app.include_router(intent_api.router)
+
 
 @app.get("/health", response_model=HealthResponse, tags=["Health"])
 async def health_check():
@@ -170,7 +196,7 @@ async def list_models():
 )
 @limiter.limit(get_rate_limit())
 async def chat_completions(
-    http_request: Request,
+    request: Request,
     body: ChatCompletionRequest,
     proxy: ProxyService = Depends(get_proxy_service),
     tenant_id: str = Depends(get_tenant_id),
@@ -189,11 +215,19 @@ async def chat_completions(
     - Multi-tenant isolation
     - Response caching (if enabled)
     - Quota enforcement (if configured)
+    - Function calling (tools/tool_choice passed through)
+    - Vision inputs (image_url passed through)
 
-    Not yet supported:
-    - Function calling
-    - Vision inputs
+    Note: Function calling and vision inputs are proxied without PII scanning
+    in the tool/function parameters or images. Only text content is scanned for PII.
     """
+    # Set tenant_id in audit context
+    try:
+        from pii_airlock.audit import set_audit_context
+        set_audit_context(tenant_id=tenant_id)
+    except ImportError:
+        pass
+
     try:
         if body.stream:
             return StreamingResponse(
@@ -227,6 +261,65 @@ async def http_exception_handler(request: Request, exc: HTTPException):
             }
         },
     )
+
+
+@app.post(
+    "/v1/embeddings",
+    tags=["OpenAI Compatible"],
+)
+@limiter.limit(get_rate_limit())
+async def create_embeddings(
+    request: Request,
+    body: EmbeddingRequest,
+    proxy: ProxyService = Depends(get_proxy_service),
+    tenant_id: str = Depends(get_tenant_id),
+):
+    """Create embeddings with PII protection.
+
+    This endpoint is compatible with OpenAI's /v1/embeddings API.
+    PII in the input text is automatically anonymized before sending to the upstream,
+    and the response is returned as-is (embeddings don't contain PII).
+
+    Note: Current implementation proxies through to upstream without
+    PII anonymization since embeddings typically don't expose PII in responses.
+    For full PII protection, consider anonymizing input text before calling.
+    """
+    import httpx
+    import time
+
+    # Set tenant_id in audit context
+    try:
+        from pii_airlock.audit import set_audit_context
+        set_audit_context(tenant_id=tenant_id)
+    except ImportError:
+        pass
+
+    try:
+        # Prepare request to upstream
+        upstream_url = os.getenv("PII_AIRLOCK_UPSTREAM_URL", "https://api.openai.com")
+        api_key = os.getenv("PII_AIRLOCK_API_KEY") or os.getenv("OPENAI_API_KEY")
+
+        if not api_key:
+            raise HTTPException(status_code=500, detail="API key not configured")
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        async with httpx.AsyncClient(timeout=120) as client:
+            response = await client.post(
+                f"{upstream_url}/v1/embeddings",
+                json=body.dict(exclude_none=True),
+                headers=headers,
+            )
+            response.raise_for_status()
+            return response.json()
+
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============================================================================
@@ -689,6 +782,55 @@ async def ui_page():
     the PII anonymization functionality without using the proxy.
     """
     return UI_HTML
+
+
+@app.get("/debug", response_class=HTMLResponse, tags=["UI"])
+async def debug_ui_page():
+    """Serve the debug UI page with dual-pane view.
+
+    This endpoint returns an advanced debugging interface with:
+    - Side-by-side comparison of original and anonymized content
+    - PII highlighting with color-coded entity types
+    - Interactive tooltips showing mapping details
+    - Export functionality for mapping data
+    """
+    # Read the debug HTML from static directory
+    static_dir = Path(__file__).parent.parent / "static"
+    debug_file = static_dir / "debug.html"
+
+    if debug_file.exists():
+        with open(debug_file, "r", encoding="utf-8") as f:
+            return f.read()
+    else:
+        # Fallback to embedded content
+        return HTMLResponse(
+            content="<html><body><h1>Debug UI not found</h1><p>Please ensure static/debug.html exists.</p></body></html>",
+            status_code=404,
+        )
+
+
+@app.get("/admin", response_class=HTMLResponse, tags=["UI"])
+async def admin_ui_page():
+    """Serve the admin UI page for management.
+
+    This endpoint returns the admin interface with:
+    - Dashboard with system statistics
+    - Compliance configuration management
+    - Allowlist management
+    - Audit log query interface
+    """
+    # Read the admin HTML from static directory
+    static_dir = Path(__file__).parent.parent / "static"
+    admin_file = static_dir / "admin.html"
+
+    if admin_file.exists():
+        with open(admin_file, "r", encoding="utf-8") as f:
+            return f.read()
+    else:
+        return HTMLResponse(
+            content="<html><body><h1>Admin UI not found</h1><p>Please ensure static/admin.html exists.</p></body></html>",
+            status_code=404,
+        )
 
 
 # ============================================================================

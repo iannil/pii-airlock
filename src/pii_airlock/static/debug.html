@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PII-AIRLOCK 调试控制台</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+        }
+
+        .header {
+            background: #16162a;
+            border-bottom: 1px solid #333;
+            padding: 16px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header h1 {
+            font-size: 20px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .header h1::before {
+            content: "🔒";
+            font-size: 24px;
+        }
+
+        .header .badge {
+            background: #4a90d9;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .main {
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 65px);
+        }
+
+        /* Input Section */
+        .input-section {
+            padding: 20px 24px;
+            background: #16162a;
+            border-bottom: 1px solid #333;
+        }
+
+        .input-row {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 12px;
+        }
+
+        .input-group {
+            flex: 1;
+        }
+
+        .input-group label {
+            display: block;
+            font-size: 13px;
+            color: #888;
+            margin-bottom: 6px;
+        }
+
+        select, input[type="text"] {
+            width: 100%;
+            padding: 10px 14px;
+            background: #252542;
+            border: 1px solid #333;
+            border-radius: 6px;
+            color: #eee;
+            font-size: 14px;
+            font-family: inherit;
+        }
+
+        select:focus, input[type="text"]:focus, textarea:focus {
+            outline: none;
+            border-color: #4a90d9;
+        }
+
+        textarea {
+            width: 100%;
+            height: 100px;
+            padding: 12px 14px;
+            background: #252542;
+            border: 1px solid #333;
+            border-radius: 6px;
+            color: #eee;
+            font-size: 14px;
+            font-family: inherit;
+            resize: vertical;
+        }
+
+        .button-row {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: #4a90d9;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #357abd;
+        }
+
+        .btn-secondary {
+            background: #3a3a5c;
+            color: #ccc;
+        }
+
+        .btn-secondary:hover {
+            background: #4a4a6c;
+        }
+
+        .btn-danger {
+            background: #d94a4a;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #bd3535;
+        }
+
+        /* Dual Pane View */
+        .dual-pane {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+            padding: 20px 24px;
+            gap: 20px;
+        }
+
+        .pane {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: #16162a;
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid #333;
+        }
+
+        .pane-header {
+            padding: 12px 16px;
+            background: #1e1e38;
+            border-bottom: 1px solid #333;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .pane-title {
+            font-size: 14px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .pane-title .icon {
+            font-size: 16px;
+        }
+
+        .pane-stats {
+            font-size: 12px;
+            color: #888;
+        }
+
+        .pane-stats .pii-count {
+            color: #d97706;
+            font-weight: 600;
+        }
+
+        .pane-content {
+            flex: 1;
+            padding: 16px;
+            overflow-y: auto;
+            font-size: 14px;
+            line-height: 1.8;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        /* PII Highlighting */
+        .pii-highlight {
+            background: rgba(217, 119, 6, 0.2);
+            border-bottom: 2px solid #d97706;
+            padding: 2px 4px;
+            margin: -2px -4px;
+            cursor: pointer;
+            position: relative;
+            border-radius: 3px;
+        }
+
+        .pii-highlight.type-PERSON {
+            background: rgba(217, 119, 6, 0.2);
+            border-bottom-color: #f59e0b;
+        }
+
+        .pii-highlight.type-PHONE_NUMBER {
+            background: rgba(34, 197, 94, 0.2);
+            border-bottom-color: #22c55e;
+        }
+
+        .pii-highlight.type-EMAIL_ADDRESS {
+            background: rgba(59, 130, 246, 0.2);
+            border-bottom-color: #3b82f6;
+        }
+
+        .pii-highlight.type-ZH_ID_CARD {
+            background: rgba(239, 68, 68, 0.2);
+            border-bottom-color: #ef4444;
+        }
+
+        .pii-highlight.type-CREDIT_CARD {
+            background: rgba(168, 85, 247, 0.2);
+            border-bottom-color: #a855f7;
+        }
+
+        .pii-highlight.type-IP_ADDRESS {
+            background: rgba(236, 72, 153, 0.2);
+            border-bottom-color: #ec4899;
+        }
+
+        .pii-highlight:hover {
+            filter: brightness(1.2);
+        }
+
+        /* Tooltip */
+        .pii-tooltip {
+            position: absolute;
+            background: #2a2a4a;
+            border: 1px solid #444;
+            border-radius: 8px;
+            padding: 12px;
+            font-size: 13px;
+            z-index: 1000;
+            min-width: 200px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+            display: none;
+        }
+
+        .pii-tooltip.visible {
+            display: block;
+        }
+
+        .pii-tooltip .tooltip-type {
+            font-weight: 600;
+            color: #4a90d9;
+            margin-bottom: 4px;
+        }
+
+        .pii-tooltip .tooltip-original {
+            color: #22c55e;
+            font-family: monospace;
+            font-size: 12px;
+            word-break: break-all;
+        }
+
+        .pii-tooltip .tooltip-confidence {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid #444;
+            font-size: 11px;
+            color: #888;
+        }
+
+        /* Mapping Table */
+        .mapping-section {
+            padding: 20px 24px;
+            background: #16162a;
+            border-top: 1px solid #333;
+        }
+
+        .mapping-header {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .mapping-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        .mapping-table th,
+        .mapping-table td {
+            padding: 10px 12px;
+            text-align: left;
+            border-bottom: 1px solid #333;
+        }
+
+        .mapping-table th {
+            background: #1e1e38;
+            font-weight: 600;
+            color: #888;
+        }
+
+        .mapping-table td {
+            font-family: "SF Mono", Monaco, monospace;
+        }
+
+        .mapping-table .placeholder {
+            color: #d97706;
+        }
+
+        .mapping-table .original {
+            color: #22c55e;
+        }
+
+        .mapping-table .type {
+            color: #888;
+            font-size: 11px;
+            text-transform: uppercase;
+        }
+
+        .mapping-table tr:hover {
+            background: #1e1e38;
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .empty-state .icon {
+            font-size: 48px;
+            margin-bottom: 12px;
+            opacity: 0.5;
+        }
+
+        /* Legend */
+        .legend {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+            padding: 12px 16px;
+            background: #1e1e38;
+            border-radius: 6px;
+            margin-top: 12px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+        }
+
+        .legend-color {
+            width: 16px;
+            height: 16px;
+            border-radius: 3px;
+        }
+
+        .legend-color.PERSON { background: rgba(217, 119, 6, 0.4); border: 1px solid #f59e0b; }
+        .legend-color.PHONE_NUMBER { background: rgba(34, 197, 94, 0.4); border: 1px solid #22c55e; }
+        .legend-color.EMAIL_ADDRESS { background: rgba(59, 130, 246, 0.4); border: 1px solid #3b82f6; }
+        .legend-color.ZH_ID_CARD { background: rgba(239, 68, 68, 0.4); border: 1px solid #ef4444; }
+        .legend-color.CREDIT_CARD { background: rgba(168, 85, 247, 0.4); border: 1px solid #a855f7; }
+        .legend-color.IP_ADDRESS { background: rgba(236, 72, 153, 0.4); border: 1px solid #ec4899; }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .dual-pane {
+                flex-direction: column;
+            }
+
+            .input-row {
+                flex-direction: column;
+            }
+        }
+
+        .loading {
+            opacity: 0.6;
+            pointer-events: none;
+        }
+
+        .error-message {
+            background: rgba(217, 74, 74, 0.2);
+            border: 1px solid #d94a4a;
+            border-radius: 6px;
+            padding: 12px 16px;
+            color: #fca5a5;
+            margin-top: 12px;
+            display: none;
+        }
+
+        .error-message.visible {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>
+            PII-AIRLOCK 调试控制台
+            <span class="badge">Debug UI</span>
+        </h1>
+        <div style="font-size: 13px; color: #888;">
+            <span id="status-indicator">● 就绪</span>
+        </div>
+    </div>
+
+    <div class="main">
+        <!-- Input Section -->
+        <div class="input-section">
+            <div class="input-row">
+                <div class="input-group" style="flex: 0 0 200px;">
+                    <label for="strategy">脱敏策略</label>
+                    <select id="strategy">
+                        <option value="placeholder">占位符 (placeholder)</option>
+                        <option value="hash">哈希 (hash)</option>
+                        <option value="mask">掩码 (mask)</option>
+                        <option value="redact">完全替换 (redact)</option>
+                        <option value="synthetic">语义保持 (synthetic)</option>
+                    </select>
+                </div>
+                <div class="input-group" style="flex: 0 0 200px;">
+                    <label for="preset">合规预设</label>
+                    <select id="preset">
+                        <option value="">-- 使用默认配置 --</option>
+                        <option value="gdpr">GDPR 合规</option>
+                        <option value="ccpa">CCPA 合规</option>
+                        <option value="pipl">PIPL 合规</option>
+                        <option value="financial">金融行业合规</option>
+                    </select>
+                </div>
+            </div>
+
+            <label for="input-text">测试文本</label>
+            <textarea id="input-text" placeholder="输入包含敏感信息的文本进行测试...">张三的电话是13800138000，邮箱是test@example.com。他的身份证号是110101199003077516，银行卡号是6222021234567890123。公司地址在北京市朝阳区建国路88号，IP地址是192.168.1.100。</textarea>
+
+            <div class="button-row" style="margin-top: 12px;">
+                <button class="btn-primary" onclick="runTest()">
+                    <span>▶</span> 运行测试
+                </button>
+                <button class="btn-secondary" onclick="clearAll()">
+                    <span>↺</span> 清空
+                </button>
+                <button class="btn-secondary" onclick="loadSample()">
+                    <span>📄</span> 加载示例
+                </button>
+            </div>
+
+            <div class="error-message" id="error-message"></div>
+
+            <div class="legend">
+                <div class="legend-item"><span class="legend-color PERSON"></span> 姓名</div>
+                <div class="legend-item"><span class="legend-color PHONE_NUMBER"></span> 电话</div>
+                <div class="legend-item"><span class="legend-color EMAIL_ADDRESS"></span> 邮箱</div>
+                <div class="legend-item"><span class="legend-color ZH_ID_CARD"></span> 身份证</div>
+                <div class="legend-item"><span class="legend-color CREDIT_CARD"></span> 银行卡</div>
+                <div class="legend-item"><span class="legend-color IP_ADDRESS"></span> IP地址</div>
+            </div>
+        </div>
+
+        <!-- Dual Pane View -->
+        <div class="dual-pane">
+            <!-- Original Pane -->
+            <div class="pane">
+                <div class="pane-header">
+                    <div class="pane-title">
+                        <span class="icon">📝</span>
+                        原始输入
+                    </div>
+                    <div class="pane-stats">
+                        检测到 <span class="pii-count" id="original-pii-count">0</span> 个敏感信息
+                    </div>
+                </div>
+                <div class="pane-content" id="original-content">
+                    <div class="empty-state">
+                        <div class="icon">📝</div>
+                        <p>输入文本并点击"运行测试"</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Anonymized Pane -->
+            <div class="pane">
+                <div class="pane-header">
+                    <div class="pane-title">
+                        <span class="icon">🔒</span>
+                        脱敏输出
+                    </div>
+                    <div class="pane-stats">
+                        策略: <span id="strategy-display">placeholder</span>
+                    </div>
+                </div>
+                <div class="pane-content" id="anonymized-content">
+                    <div class="empty-state">
+                        <div class="icon">🔒</div>
+                        <p>脱敏结果将显示在这里</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Mapping Table -->
+        <div class="mapping-section">
+            <div class="mapping-header">
+                <span>映射关系</span>
+                <button class="btn-secondary" style="padding: 6px 12px; font-size: 12px;" onclick="exportMapping()">
+                    📥 导出 JSON
+                </button>
+            </div>
+            <table class="mapping-table">
+                <thead>
+                    <tr>
+                        <th style="width: 50px;">类型</th>
+                        <th>占位符 / 替换值</th>
+                        <th>原始值</th>
+                    </tr>
+                </thead>
+                <tbody id="mapping-body">
+                    <tr>
+                        <td colspan="3" style="text-align: center; color: #666; padding: 20px;">
+                            暂无映射数据
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Tooltip -->
+    <div class="pii-tooltip" id="tooltip">
+        <div class="tooltip-type" id="tooltip-type"></div>
+        <div class="tooltip-original" id="tooltip-original"></div>
+        <div class="tooltip-confidence" id="tooltip-confidence"></div>
+    </div>
+
+    <script>
+        let currentMapping = null;
+        let currentPiiInfo = [];
+
+        const piiTypeColors = {
+            'PERSON': 'PERSON',
+            'PHONE_NUMBER': 'PHONE_NUMBER',
+            'EMAIL_ADDRESS': 'EMAIL_ADDRESS',
+            'ZH_ID_CARD': 'ZH_ID_CARD',
+            'ID_CARD': 'ZH_ID_CARD',
+            'CREDIT_CARD': 'CREDIT_CARD',
+            'IP_ADDRESS': 'IP_ADDRESS',
+            'URL': 'URL',
+            'DATE_TIME': 'DATE_TIME',
+            'LOCATION': 'LOCATION',
+        };
+
+        const piiTypeNames = {
+            'PERSON': '姓名',
+            'PHONE_NUMBER': '电话号码',
+            'EMAIL_ADDRESS': '邮箱地址',
+            'ZH_ID_CARD': '身份证号',
+            'ID_CARD': '证件号',
+            'CREDIT_CARD': '银行卡号',
+            'IP_ADDRESS': 'IP地址',
+            'URL': 'URL',
+            'DATE_TIME': '日期时间',
+            'LOCATION': '位置信息',
+        };
+
+        async function runTest() {
+            const text = document.getElementById('input-text').value.trim();
+            if (!text) {
+                showError('请输入测试文本');
+                return;
+            }
+
+            const strategy = document.getElementById('strategy').value;
+            const preset = document.getElementById('preset').value;
+
+            hideError();
+            setStatus('处理中...', '#4a90d9');
+            document.body.classList.add('loading');
+
+            try {
+                let endpoint = '/api/test/anonymize';
+                let body = { text, strategy };
+
+                // If preset is selected, we'll need to apply its strategies
+                // For now, just use the selected strategy
+
+                const res = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+
+                if (!res.ok) {
+                    const err = await res.json();
+                    throw new Error(err.detail || '请求失败');
+                }
+
+                const data = await res.json();
+                currentMapping = data.mapping;
+
+                displayResults(data);
+                setStatus('✓ 完成', '#22c55e');
+
+            } catch (err) {
+                showError(err.message);
+                setStatus('✗ 错误', '#d94a4a');
+            } finally {
+                document.body.classList.remove('loading');
+            }
+        }
+
+        function displayResults(data) {
+            // Update original content with highlights
+            const originalHtml = highlightPII(data.original, data.mapping, true);
+            document.getElementById('original-content').innerHTML = originalHtml;
+            document.getElementById('original-pii-count').textContent = Object.keys(data.mapping).length;
+
+            // Update anonymized content
+            const anonymizedHtml = highlightPII(data.anonymized, data.mapping, false);
+            document.getElementById('anonymized-content').innerHTML = anonymizedHtml;
+
+            // Update strategy display
+            document.getElementById('strategy-display').textContent = data.strategy;
+
+            // Update mapping table
+            displayMapping(data.mapping);
+
+            // Setup tooltips
+            setupTooltips();
+        }
+
+        function highlightPII(text, mapping, isOriginal) {
+            if (!mapping || Object.keys(mapping).length === 0) {
+                return escapeHtml(text);
+            }
+
+            let result = escapeHtml(text);
+            const replacements = [];
+
+            for (const [placeholder, original] of Object.entries(mapping)) {
+                const piiType = inferType(placeholder);
+                const displayValue = isOriginal ? original : placeholder;
+
+                // Store the PII info for tooltip
+                const info = {
+                    placeholder,
+                    original,
+                    piiType,
+                };
+                const index = currentPiiInfo.length;
+                currentPiiInfo.push(info);
+
+                // Replace in the result
+                const searchFor = isOriginal ? original : placeholder;
+                const escapedSearch = escapeHtml(searchFor);
+
+                // Use a unique marker to avoid nested replacements
+                const marker = `__PII_${index}__`;
+                replacements.push({ marker, replacement: `<span class="pii-highlight type-${piiType}" data-index="${index}">${escapedSearch}</span>` });
+
+                result = result.replace(new RegExp(escapeRegExp(escapedSearch), 'g'), marker);
+            }
+
+            // Now replace markers with actual HTML
+            for (const { marker, replacement } of replacements) {
+                result = result.replace(marker, replacement);
+            }
+
+            return result;
+        }
+
+        function inferType(placeholder) {
+            const upper = placeholder.toUpperCase();
+            for (const [type, colorType] of Object.entries(piiTypeColors)) {
+                if (upper.includes(type) || upper.includes(colorType)) {
+                    return colorType;
+                }
+            }
+            return 'PERSON';
+        }
+
+        function displayMapping(mapping) {
+            const tbody = document.getElementById('mapping-body');
+
+            if (!mapping || Object.keys(mapping).length === 0) {
+                tbody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: #666; padding: 20px;">未检测到敏感信息</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = '';
+            for (const [placeholder, original] of Object.entries(mapping)) {
+                const piiType = inferType(placeholder);
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td><span class="type">${piiTypeNames[piiType] || piiType}</span></td>
+                    <td class="placeholder">${escapeHtml(placeholder)}</td>
+                    <td class="original">${escapeHtml(original)}</td>
+                `;
+                tbody.appendChild(row);
+            }
+        }
+
+        function setupTooltips() {
+            const highlights = document.querySelectorAll('.pii-highlight');
+            const tooltip = document.getElementById('tooltip');
+
+            highlights.forEach(el => {
+                el.addEventListener('mouseenter', (e) => {
+                    const index = parseInt(el.dataset.index);
+                    const info = currentPiiInfo[index];
+
+                    if (info) {
+                        document.getElementById('tooltip-type').textContent = piiTypeNames[info.piiType] || info.piiType;
+                        document.getElementById('tooltip-original').textContent = '原始值: ' + info.original;
+                        document.getElementById('tooltip-confidence').textContent = '占位符: ' + info.placeholder;
+
+                        tooltip.style.left = (e.pageX + 10) + 'px';
+                        tooltip.style.top = (e.pageY + 10) + 'px';
+                        tooltip.classList.add('visible');
+                    }
+                });
+
+                el.addEventListener('mouseleave', () => {
+                    tooltip.classList.remove('visible');
+                });
+
+                el.addEventListener('mousemove', (e) => {
+                    tooltip.style.left = (e.pageX + 10) + 'px';
+                    tooltip.style.top = (e.pageY + 10) + 'px';
+                });
+            });
+        }
+
+        function clearAll() {
+            document.getElementById('input-text').value = '';
+            document.getElementById('original-content').innerHTML = '<div class="empty-state"><div class="icon">📝</div><p>输入文本并点击"运行测试"</p></div>';
+            document.getElementById('anonymized-content').innerHTML = '<div class="empty-state"><div class="icon">🔒</div><p>脱敏结果将显示在这里</p></div>';
+            document.getElementById('mapping-body').innerHTML = '<tr><td colspan="3" style="text-align: center; color: #666; padding: 20px;">暂无映射数据</td></tr>';
+            document.getElementById('original-pii-count').textContent = '0';
+            currentMapping = null;
+            currentPiiInfo = [];
+            hideError();
+            setStatus('● 就绪', '#888');
+        }
+
+        function loadSample() {
+            document.getElementById('input-text').value = `张三的电话是13800138000，邮箱是test@example.com。
+他的身份证号是110101199003077516，银行卡号是6222021234567890123。
+公司地址在北京市朝阳区建国路88号，IP地址是192.168.1.100。
+李四的手机是13912345678，住在上海市浦东新区陆家嘴环路1000号。`;
+        }
+
+        function exportMapping() {
+            if (!currentMapping) {
+                showError('没有可导出的映射数据');
+                return;
+            }
+
+            const blob = new Blob([JSON.stringify(currentMapping, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'pii-mapping.json';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        function showError(message) {
+            const el = document.getElementById('error-message');
+            el.textContent = message;
+            el.classList.add('visible');
+            setTimeout(() => el.classList.remove('visible'), 5000);
+        }
+
+        function hideError() {
+            document.getElementById('error-message').classList.remove('visible');
+        }
+
+        function setStatus(text, color) {
+            const el = document.getElementById('status-indicator');
+            el.textContent = text;
+            el.style.color = color;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function escapeRegExp(string) {
+            return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            setStatus('● 就绪', '#888');
+        });
+    </script>
+</body>
+</html>

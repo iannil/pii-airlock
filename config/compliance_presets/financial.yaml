@@ -1,0 +1,294 @@
+# Financial Industry Compliance Preset
+# 金融行业合规配置 (银保监会、PCI-DSS 等金融监管要求)
+#
+# 金融合规要点:
+# - 严格保护账户信息、交易数据
+# - 符合 PCI-DSS 支付卡行业数据安全标准
+# - 符合银保监会《个人金融信息保护技术规范》
+# - 反洗钱 (AML) 要求
+# - 客户身份识别 (KYC) 数据保护
+
+name: "Financial Compliance"
+description: "金融行业合规配置，符合银保监会、PCI-DSS 等金融监管要求"
+version: "1.0"
+industry: ["Banking", "Insurance", "Securities", "Fintech"]
+region: ["CN", "US", "EU"]
+language: ["zh", "en"]
+
+# PII 类型定义 - 金融行业关注的敏感信息
+pii_types:
+  # 身份识别类
+  - PERSON               # 姓名
+  - ZH_PERSON            # 中文姓名
+  - ZH_ID_CARD           # 身份证（中国）
+  - PASSPORT             # 护照
+  - DRIVER_LICENSE       # 驾照
+  - SSN                  # 社会保障号（美国）
+  - NRP                  # 国家身份证
+
+  # 金融账户类
+  - BANK_ACCOUNT         # 银行账户
+  - IBAN_CODE            # 国际银行账户
+  - CREDIT_CARD          # 信用卡
+  - DEBIT_CARD           # 借记卡
+  - CARD_NUMBER          # 卡号
+
+  # 联系方式
+  - EMAIL_ADDRESS        # 邮箱
+  - PHONE_NUMBER         # 电话
+  - ZH_PHONE             # 中文手机
+
+  # 金融交易类
+  - TRANSACTION_ID       # 交易ID
+  - ORDER_NUMBER         # 订单号
+  - INVOICE_NUMBER       # 发票号
+
+  # 资产类
+  - STOCK_CODE           # 股票代码
+  - FUND_CODE            # 基金代码
+  - BOND_CODE            # 债券代码
+
+  # 位置与地址
+  - LOCATION             # 位置
+  - ADDRESS              # 地址
+  - POSTAL_CODE          # 邮编
+  - IP_ADDRESS           # IP地址
+
+  # 设备与标识
+  - DEVICE_ID            # 设备ID
+  - MAC_ADDRESS          # MAC地址
+  - IMEI                 # 设备IMEI
+
+  # 其他
+  - DATE_TIME            # 日期时间
+  - URL                  # URL
+  - WECHAT_ID            # 微信ID
+  - ALIPAY_ACCOUNT       # 支付宝账户
+
+# 脱敏策略配置 - 金融行业严格保护
+strategies:
+  # 默认策略 - 使用掩码保留部分格式验证
+  default: "mask"
+
+  # 身份识别类 - 严格保护
+  PERSON: "synthetic"       # 姓名使用合成替换保持语义
+  ZH_PERSON: "synthetic"
+  ZH_ID_CARD: "redact"      # 身份证完全删除
+  PASSPORT: "redact"        # 护照完全删除
+  DRIVER_LICENSE: "mask"
+  SSN: "redact"
+  NRP: "redact"
+
+  # 金融账户类 - 最高级别保护
+  BANK_ACCOUNT: "redact"
+  IBAN_CODE: "redact"
+  CREDIT_CARD: "redact"     # PCI-DSS 要求
+  DEBIT_CARD: "redact"
+  CARD_NUMBER: "redact"
+
+  # 联系方式
+  EMAIL_ADDRESS: "mask"
+  PHONE_NUMBER: "mask"
+  ZH_PHONE: "mask"
+
+  # 金融交易类 - 掩码处理
+  TRANSACTION_ID: "mask"
+  ORDER_NUMBER: "mask"
+  INVOICE_NUMBER: "mask"
+
+  # 资产类 - 占位符
+  STOCK_CODE: "placeholder"
+  FUND_CODE: "placeholder"
+  BOND_CODE: "placeholder"
+
+  # 位置与地址
+  LOCATION: "redact"
+  ADDRESS: "redact"
+  POSTAL_CODE: "mask"
+  IP_ADDRESS: "redact"
+
+  # 设备标识
+  DEVICE_ID: "redact"
+  MAC_ADDRESS: "redact"
+  IMEI: "redact"
+
+  # 特定平台账户
+  WECHAT_ID: "mask"
+  ALIPAY_ACCOUNT: "mask"
+
+  # 其他
+  DATE_TIME: "placeholder"
+  URL: "placeholder"
+
+# 数据保留策略
+retention:
+  mapping_ttl: 60  # 1分钟（金融行业最小必要原则）
+
+  audit_retention_days: 2555  # 7年（金融监管要求）
+
+  log_sensitive_content: false
+
+  # 符合审计要求
+  financial_audit_compliance: true
+
+# 防幻觉配置
+anonymization:
+  inject_prompt: true
+  inject_prompt_template: |
+    [SYSTEM NOTICE] This conversation contains anonymized financial data per financial compliance requirements.
+    - ALL financial information has been anonymized for security.
+    - Placeholders like <PERSON_1>, <ACCOUNT_1> represent anonymized data.
+    - Do NOT attempt to reverse-engineure or guess original values.
+    - Handle financial queries with anonymized data only.
+    - Maintain placeholders exactly as provided.
+
+# 合规检查规则
+compliance_rules:
+  # PCI-DSS 合规检查
+  pci_dss:
+    enabled: true
+    # 禁止存储完整卡号
+    no_full_card_number: true
+    # 禁止存储 CVV
+    no_cvv_storage: true
+    # 禁止存储 PIN
+    no_pin_storage: true
+
+  # 反洗钱检查
+  aml_checks:
+    enabled: true
+    log_large_transactions: true
+    log_suspicious_patterns: true
+
+  # KYC 数据保护
+  kyc_protection:
+    enabled: true
+    strict_id_protection: true
+    limit_kyc_data_access: true
+
+  # 金融数据最小化
+  data_minimization:
+    enabled: true
+    warn_on_excessive_pii: true
+    financial_data_minimization: true
+
+# 风险评分配置
+risk_scoring:
+  # 金融行业高风险数据
+  high_risk_types:
+    - CREDIT_CARD
+    - BANK_ACCOUNT
+    - IBAN_CODE
+    - ZH_ID_CARD
+    - SSN
+    - PASSPORT
+
+  # 金融行业中风险数据
+  medium_risk_types:
+    - EMAIL_ADDRESS
+    - PHONE_NUMBER
+    - LOCATION
+    - TRANSACTION_ID
+    - DEVICE_ID
+
+  # 风险等级计算
+  risk_factors:
+    - financial_data: 2.0
+    - identity_document: 2.0
+    - contact_info: 1.0
+    - location_data: 1.5
+
+# 自定义模式（金融行业特定）
+custom_patterns:
+  - name: cn_bank_card
+    entity_type: CN_BANK_CARD
+    regex: "\\b(6[0-9]{15,18}|4[0-9]{15}|5[0-9]{15}|3[47][0-9]{13})\\b"
+    score: 0.95
+    context: ["银行卡", "卡号", "card", "bank"]
+
+  - name: cn_bank_account
+    entity_type: CN_BANK_ACCOUNT
+    regex: "\\b[0-9]{16,19}\\b"
+    score: 0.7
+    context: ["账号", "账户", "account"]
+
+  - name: cn_stock_code
+    entity_type: CN_STOCK_CODE
+    regex: "\\b(60[0-9]{4}|00[0-9]{4}|30[0-9]{4})\\b"
+    score: 0.85
+    context: ["股票", "stock", "证券"]
+
+  - name: cn_fund_code
+    entity_type: CN_FUND_CODE
+    regex: "\\b[0-9]{6}\\b"
+    score: 0.6
+    context: ["基金", "fund", "开放式基金"]
+
+  - name: cn_transaction_id
+    entity_type: TRANSACTION_ID
+    regex: "\\b[0-9]{20,32}\\b"
+    score: 0.7
+    context: ["交易", "transaction", "订单", "order"]
+
+  - name: cn_payment_reference
+    entity_type: PAYMENT_REFERENCE
+    regex: "(?:付款|转账|支付)[\\s:：]*[0-9]{6,}"
+    score: 0.8
+    context: ["付款", "转账", "支付", "payment"]
+
+  - name: swift_code
+    entity_type: SWIFT_CODE
+    regex: "\\b[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?\\b"
+    score: 0.95
+    context: ["SWIFT", "汇款", "电汇"]
+
+  - name: card_cvv
+    entity_type: CARD_CVV
+    regex: "\\b[Cc][Vv][Vv]?[\\s:：]*[0-9]{3,4}\\b"
+    score: 0.9
+    context: ["CVV", "卡背面"]
+
+  - name: card_expiry
+    entity_type: CARD_EXPIRY
+    regex: "\\b(0[1-9]|1[0-2])[/-]?([0-9]{2}|[0-9]{4})\\b"
+    score: 0.7
+    context: ["有效期", "expiry", "expire"]
+
+# 特殊处理规则
+special_rules:
+  # 卡号格式处理
+  card_number_handling:
+    # 识别和屏蔽 CVV
+    mask_cvv: true
+    # 识别和屏蔽有效期
+    mask_expiry: true
+    # Luhn 算法验证卡号
+    luhn_validation: true
+
+  # 金融交易处理
+  transaction_handling:
+    # 识别交易金额
+    detect_amounts: true
+    # 识别交易时间
+    detect_timestamps: true
+
+  # 客户身份识别数据处理
+  kyc_data_handling:
+    # 严格身份证保护
+    strict_id_card_protection: true
+    # 人脸识别信息保护
+    biometric_protection: true
+
+# 告警规则
+alerts:
+  # 敏感操作告警
+  sensitive_operations:
+    - credit_card_detected
+    - bank_account_detected
+    - transaction_id_leaked
+    - cvv_detected
+
+  # 风险阈值
+  thresholds:
+    high_risk_count: 1    # 检测到1个高风险即告警
+    medium_risk_count: 3  # 检测到3个中风险即告警

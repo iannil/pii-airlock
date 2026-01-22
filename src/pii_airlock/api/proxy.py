@@ -13,9 +13,11 @@ Supports:
 - Multi-tenant isolation
 - LLM response caching
 - Quota enforcement
+- Audit logging
 """
 
 import json
+import os
 import time
 import uuid
 import httpx
@@ -41,9 +43,31 @@ from pii_airlock.metrics.collectors import (
     UPSTREAM_LATENCY,
     UPSTREAM_ERRORS,
     QUOTA_EXCEEDED,
+    SECRET_DETECTED,
+    SECRET_BLOCKED,
 )
 from pii_airlock.cache.llm_cache import LLMCache, get_cache_key
 from pii_airlock.auth.quota import QuotaType, check_quota as check_quota_limit
+
+# Audit logging (lazy import to avoid circular dependencies)
+_audit_logger = None
+
+# Secret scanning (lazy import)
+_secret_interceptor = None
+
+
+def get_audit_logger():
+    """Lazy import of audit logger."""
+    global _audit_logger
+    if _audit_logger is None:
+        try:
+            from pii_airlock.audit import audit_logger
+            _audit_logger = audit_logger()
+        except ImportError:
+            # Audit module not available
+            _audit_logger = False
+    return _audit_logger if _audit_logger is not False else None
+
 
 logger = get_logger(__name__)
 
@@ -117,6 +141,7 @@ class ProxyService:
         timeout: float = 120.0,
         cache: Optional[LLMCache] = None,
         enable_cache: bool = False,
+        enable_secret_scan: Optional[bool] = None,
     ) -> None:
         """Initialize the proxy service.
 
@@ -129,6 +154,8 @@ class ProxyService:
             timeout: Request timeout in seconds.
             cache: Optional LLM cache instance.
             enable_cache: Whether response caching is enabled.
+            enable_secret_scan: Whether to enable secret scanning. If None, reads from
+                PII_AIRLOCK_SECRET_SCAN_ENABLED env var (default: true).
         """
         self.upstream_url = upstream_url.rstrip("/")
         self.api_key = api_key
@@ -139,6 +166,12 @@ class ProxyService:
         self.timeout = timeout
         self.cache = cache
         self.enable_cache = enable_cache
+
+        # Initialize secret scanning setting
+        if enable_secret_scan is None:
+            self.enable_secret_scan = os.getenv("PII_AIRLOCK_SECRET_SCAN_ENABLED", "true").lower() == "true"
+        else:
+            self.enable_secret_scan = enable_secret_scan
 
         # Lazy initialization of anonymizer (requires spaCy model)
         self._anonymizer_initialized = False
@@ -214,6 +247,33 @@ class ProxyService:
                     "message_count": len(messages),
                 },
             )
+
+            # Audit logging for PII detected
+            audit = get_audit_logger()
+            if audit:
+                import asyncio
+                try:
+                    # Run audit logging asynchronously without blocking
+                    loop = asyncio.get_running_loop()
+                    for entity_type, count in pii_counts.items():
+                        loop.create_task(
+                            audit.log_pii_detected(
+                                entity_type=entity_type,
+                                entity_count=count,
+                                request_id=request_id,
+                            )
+                        )
+                        loop.create_task(
+                            audit.log_pii_anonymized(
+                                entity_type=entity_type,
+                                entity_count=count,
+                                strategy_used="placeholder",
+                                request_id=request_id,
+                            )
+                        )
+                except RuntimeError:
+                    # No event loop running
+                    pass
         else:
             logger.debug(
                 "No PII detected in messages",
@@ -245,19 +305,131 @@ class ProxyService:
         if len(mapping) == 0:
             return messages
 
+        # Get prompt template from active compliance preset, or use default
+        prompt_template = self._get_prompt_template()
+
         # Check if there's already a system message
         if messages and messages[0].role == "system":
             # Append to existing system message
             updated_system = Message(
                 role="system",
-                content=f"{messages[0].content}\n\n{ANTI_HALLUCINATION_PROMPT}",
+                content=f"{messages[0].content}\n\n{prompt_template}",
                 name=messages[0].name,
             )
             return [updated_system] + messages[1:]
         else:
             # Prepend new system message
-            system_msg = Message(role="system", content=ANTI_HALLUCINATION_PROMPT)
+            system_msg = Message(role="system", content=prompt_template)
             return [system_msg] + messages
+
+    def _get_prompt_template(self) -> str:
+        """Get the anti-hallucination prompt template.
+
+        Returns template from active compliance preset if available,
+        otherwise returns the default template.
+
+        Returns:
+            Prompt template string.
+        """
+        try:
+            from pii_airlock.api.compliance_api import get_active_prompt_template
+            template = get_active_prompt_template()
+            if template:
+                return template
+        except (ImportError, Exception):
+            pass
+        return ANTI_HALLUCINATION_PROMPT
+
+    def _get_secret_interceptor(self):
+        """Get or create the secret interceptor instance."""
+        global _secret_interceptor
+        if _secret_interceptor is None:
+            try:
+                from pii_airlock.core.secret_scanner import get_secret_interceptor
+                _secret_interceptor = get_secret_interceptor()
+            except ImportError:
+                _secret_interceptor = False  # Mark as unavailable
+        return _secret_interceptor if _secret_interceptor is not False else None
+
+    def _check_secrets(
+        self,
+        messages: list[Message],
+        request_id: str,
+    ) -> tuple[bool, str]:
+        """Check messages for secrets that should be blocked.
+
+        Args:
+            messages: List of conversation messages.
+            request_id: Unique request identifier.
+
+        Returns:
+            Tuple of (should_block, error_message).
+        """
+        if not self.enable_secret_scan:
+            return False, ""
+
+        interceptor = self._get_secret_interceptor()
+        if interceptor is None:
+            return False, ""
+
+        # Convert messages to dict format for scanning
+        messages_dict = [m.model_dump() for m in messages]
+        result = interceptor.check_messages(
+            messages_dict,
+            context={"request_id": request_id},
+        )
+
+        if result.scan_result.matches:
+            # Record metrics
+            for match in result.scan_result.matches:
+                SECRET_DETECTED.labels(
+                    secret_type=match.secret_type.value,
+                    risk_level=match.risk_level,
+                ).inc()
+
+        if result.should_block:
+            # Record blocked metrics
+            for match in result.blocked_matches or []:
+                SECRET_BLOCKED.labels(secret_type=match.secret_type.value).inc()
+
+            # Log the block
+            logger.warning(
+                f"Request blocked due to detected secrets: {result.reason}",
+                extra={
+                    "event": "secret_blocked",
+                    "request_id": request_id,
+                    "secret_count": len(result.blocked_matches) if result.blocked_matches else 0,
+                },
+            )
+
+            # Audit logging for secret detection
+            audit = get_audit_logger()
+            if audit and result.blocked_matches:
+                try:
+                    import asyncio
+                    try:
+                        loop = asyncio.get_running_loop()
+                        for match in result.blocked_matches:
+                            loop.create_task(
+                                audit.log(
+                                    event_type="secret_blocked",
+                                    entity_type=match.secret_type.value,
+                                    metadata={
+                                        "pattern_name": match.pattern_name,
+                                        "risk_level": match.risk_level,
+                                        "request_id": request_id,
+                                        "reason": result.reason,
+                                    },
+                                )
+                            )
+                    except RuntimeError:
+                        pass  # No event loop running
+                except Exception:
+                    pass  # Audit logging failed
+
+            return True, result.reason or "Request blocked: sensitive information detected"
+
+        return False, ""
 
     def _deanonymize_content(self, content: str, mapping: PIIMapping) -> str:
         """Deanonymize content using mapping.
@@ -425,6 +597,12 @@ class ProxyService:
         if not self._check_and_record_quota(tenant_id):
             from fastapi import HTTPException
             raise HTTPException(status_code=429, detail="Quota exceeded")
+
+        # Step 0.5: Check for secrets in the request
+        should_block, block_reason = self._check_secrets(request.messages, request_id)
+        if should_block:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=400, detail=block_reason)
 
         # Step 1: Anonymize messages
         anonymized_messages, mapping = self._anonymize_messages(
@@ -674,6 +852,21 @@ class ProxyService:
                 "message_count": len(request.messages),
             },
         )
+
+        # Step 0: Check for secrets in the request
+        should_block, block_reason = self._check_secrets(request.messages, request_id)
+        if should_block:
+            from fastapi import HTTPException
+            # For streaming, we yield an error event instead of raising
+            error_data = {
+                "error": {
+                    "message": block_reason,
+                    "type": "secret_detected",
+                    "code": "secret_blocked",
+                }
+            }
+            yield f"data: {json.dumps(error_data)}\n\n"
+            return
 
         # Step 1: Anonymize messages
         anonymized_messages, mapping = self._anonymize_messages(

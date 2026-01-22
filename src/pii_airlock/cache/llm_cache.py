@@ -161,6 +161,7 @@ class LLMCache:
         """
         self.default_ttl = default_ttl
         self.max_size = max_size
+        self._cleanup_interval = cleanup_interval
         self._store: Dict[str, CacheEntry] = {}
         self._tenant_index: Dict[str, set] = {}  # tenant_id -> set of keys
         self._lock = threading.RLock()
@@ -189,6 +190,20 @@ class LLMCache:
             time.sleep(self._cleanup_interval)
             self.cleanup_expired()
 
+    def _make_internal_key(self, key: str, tenant_id: str) -> str:
+        """Create internal storage key including tenant.
+
+        This ensures tenant isolation in the cache store.
+
+        Args:
+            key: External cache key.
+            tenant_id: Tenant identifier.
+
+        Returns:
+            Internal storage key.
+        """
+        return f"{tenant_id}:{key}"
+
     def get(self, key: str, tenant_id: Optional[str] = None) -> Optional[CacheEntry]:
         """Get cached entry by key.
 
@@ -201,8 +216,11 @@ class LLMCache:
         """
         start_time = time.time()
 
+        # Build internal key - tenant_id is required for proper isolation
+        internal_key = self._make_internal_key(key, tenant_id or "default")
+
         with self._lock:
-            entry = self._store.get(key)
+            entry = self._store.get(internal_key)
 
             if entry is None:
                 CACHE_MISSES.labels(
@@ -214,8 +232,8 @@ class LLMCache:
             # Check expiration
             if entry.is_expired:
                 # Remove expired entry
-                del self._store[key]
-                self._remove_from_tenant_index(entry.tenant_id, key)
+                del self._store[internal_key]
+                self._remove_from_tenant_index(entry.tenant_id, internal_key)
                 CACHE_MISSES.labels(
                     tenant_id=tenant_id or entry.tenant_id,
                     model=entry.model,
@@ -280,7 +298,11 @@ class LLMCache:
 
         # Calculate expiration
         now = time.time()
-        expires_at = now + (ttl or self.default_ttl) if ttl else None
+        effective_ttl = ttl if ttl is not None else self.default_ttl
+        expires_at = now + effective_ttl if effective_ttl is not None else None
+
+        # Create internal key with tenant isolation
+        internal_key = self._make_internal_key(key, tenant_id)
 
         entry = CacheEntry(
             key=key,
@@ -295,7 +317,7 @@ class LLMCache:
 
         with self._lock:
             # Enforce max size by evicting oldest entries
-            while len(self._store) >= self.max_size and key not in self._store:
+            while len(self._store) >= self.max_size and internal_key not in self._store:
                 # Find oldest entry
                 oldest_key = min(
                     self._store.keys(),
@@ -305,12 +327,12 @@ class LLMCache:
                 self._remove_from_tenant_index(oldest.tenant_id, oldest_key)
 
             # Store entry
-            self._store[key] = entry
+            self._store[internal_key] = entry
 
             # Update tenant index
             if tenant_id not in self._tenant_index:
                 self._tenant_index[tenant_id] = set()
-            self._tenant_index[tenant_id].add(key)
+            self._tenant_index[tenant_id].add(internal_key)
 
             # Update metrics
             self._update_tenant_metrics()
@@ -328,19 +350,21 @@ class LLMCache:
 
         return entry
 
-    def delete(self, key: str) -> bool:
+    def delete(self, key: str, tenant_id: Optional[str] = None) -> bool:
         """Delete entry from cache.
 
         Args:
             key: Cache key.
+            tenant_id: Optional tenant ID for key construction.
 
         Returns:
             True if deleted, False if not found.
         """
+        internal_key = self._make_internal_key(key, tenant_id or "default")
         with self._lock:
-            entry = self._store.pop(key, None)
+            entry = self._store.pop(internal_key, None)
             if entry:
-                self._remove_from_tenant_index(entry.tenant_id, key)
+                self._remove_from_tenant_index(entry.tenant_id, internal_key)
                 self._update_tenant_metrics()
                 return True
             return False

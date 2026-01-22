@@ -12,6 +12,7 @@ Example:
     <PERSON_1>的电话是<PHONE_1>
 """
 
+import os
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,6 +26,7 @@ from pii_airlock.core.mapping import PIIMapping
 from pii_airlock.core.counter import PlaceholderCounter
 from pii_airlock.core.strategies import StrategyConfig, StrategyType, get_strategy
 from pii_airlock.recognizers.registry import create_analyzer_with_chinese_support
+from pii_airlock.recognizers.allowlist import is_allowlisted
 
 
 # Global singleton for shared AnalyzerEngine (heavy to initialize)
@@ -98,11 +100,22 @@ class AnonymizationResult:
         text: The anonymized text with placeholders.
         mapping: Bidirectional mapping between original values and placeholders.
         entities: List of detected PII entities with their locations.
+        allowlist_exemptions: List of entities that were exempted from anonymization
+            because they were in the allowlist.
+        intent_exemptions: List of entities that were exempted from anonymization
+            because they were in a question context (e.g., "Who is...?").
     """
 
     text: str
     mapping: PIIMapping
     entities: list[RecognizerResult] = field(default_factory=list)
+    allowlist_exemptions: list[dict] = field(default_factory=list)
+    intent_exemptions: list[dict] = field(default_factory=list)
+
+    @property
+    def all_exemptions(self) -> list[dict]:
+        """Get all exemptions (allowlist + intent)."""
+        return self.allowlist_exemptions + self.intent_exemptions
 
     @property
     def has_pii(self) -> bool:
@@ -178,6 +191,8 @@ class Anonymizer:
         use_shared_analyzer: bool = True,
         strategy_config: Optional[StrategyConfig] = None,
         load_strategies_from_env: bool = False,
+        enable_allowlist: Optional[bool] = None,
+        enable_intent_detection: Optional[bool] = None,
     ) -> None:
         """Initialize the anonymizer.
 
@@ -195,17 +210,43 @@ class Anonymizer:
             strategy_config: Configuration for anonymization strategies per entity type.
             load_strategies_from_env: If True, load strategy configuration from
                 environment variables (PII_AIRLOCK_STRATEGY_*).
+            enable_allowlist: If True, entities in the allowlist will not be anonymized.
+                If None, reads from PII_AIRLOCK_ALLOWLIST_ENABLED env var (default: True).
+            enable_intent_detection: If True, uses intent detection to preserve entities
+                in question contexts (e.g., "Who is Xi Jinping?"). If None, reads from
+                PII_AIRLOCK_INTENT_DETECTION_ENABLED env var (default: True).
         """
         self.language = language
         self.score_threshold = score_threshold
 
-        # Initialize strategy configuration
-        if load_strategies_from_env:
-            self.strategy_config = StrategyConfig.from_env()
-        elif strategy_config:
-            self.strategy_config = strategy_config
+        # Initialize allowlist setting
+        if enable_allowlist is None:
+            self.enable_allowlist = os.getenv("PII_AIRLOCK_ALLOWLIST_ENABLED", "true").lower() == "true"
         else:
-            self.strategy_config = StrategyConfig()
+            self.enable_allowlist = enable_allowlist
+
+        # Initialize intent detection setting
+        if enable_intent_detection is None:
+            self.enable_intent_detection = os.getenv("PII_AIRLOCK_INTENT_DETECTION_ENABLED", "true").lower() == "true"
+        else:
+            self.enable_intent_detection = enable_intent_detection
+
+        # Lazy initialize intent detector only if needed
+        self._intent_detector = None
+
+        # Initialize strategy configuration
+        # Priority: explicit strategy_config > env vars > compliance preset > default
+        if strategy_config:
+            self.strategy_config = strategy_config
+        elif load_strategies_from_env:
+            self.strategy_config = StrategyConfig.from_env()
+        else:
+            # Check if there's an active compliance preset with strategy config
+            preset_config = self._get_compliance_preset_strategy_config()
+            if preset_config:
+                self.strategy_config = preset_config
+            else:
+                self.strategy_config = StrategyConfig()
 
         # Initialize entity mappings (copy defaults to avoid mutating class attributes)
         self.SUPPORTED_ENTITIES = list(self.DEFAULT_ENTITIES)
@@ -310,45 +351,123 @@ class Anonymizer:
         # Step 4: Sort results by position (reverse order for replacement)
         sorted_results = sorted(filtered_results, key=lambda x: x.start, reverse=True)
 
-        # Step 4: Replace PII using configured strategies (from end to start to preserve positions)
+        # Step 5: Track exemptions for audit logging
+        allowlist_exemptions: list[dict] = []
+        intent_exemptions: list[dict] = []
+
+        # Step 6: Replace PII using configured strategies (from end to start to preserve positions)
         anonymized_text = text
         for result in sorted_results:
             original_value = text[result.start : result.end]
             placeholder_type = self.ENTITY_TYPE_MAP.get(result.entity_type, result.entity_type)
 
+            # Check 1: Intent detection - preserve entities in question context
+            if self.enable_intent_detection:
+                is_question, exemption_reason = self._check_intent_context(
+                    text, result.start, result.end, result.entity_type
+                )
+                if is_question:
+                    intent_exemptions.append({
+                        "entity_type": result.entity_type,
+                        "original_value": original_value,
+                        "start": result.start,
+                        "end": result.end,
+                        "reason": exemption_reason,
+                    })
+                    continue
+
+            # Check 2: Allowlist - if entity is allowlisted, skip anonymization
+            if self.enable_allowlist and is_allowlisted(
+                result.entity_type, original_value, default=False
+            ):
+                allowlist_exemptions.append({
+                    "entity_type": result.entity_type,
+                    "original_value": original_value,
+                    "start": result.start,
+                    "end": result.end,
+                })
+                continue
+
             # Get the strategy for this entity type
             strategy_type = self.strategy_config.get_strategy(result.entity_type)
             strategy = get_strategy(strategy_type)
 
-            # Check if this exact value already has a placeholder/hash
+            # Check if this exact value already has a placeholder/hash/synthetic
             existing = mapping.get_placeholder(placeholder_type, original_value)
             if existing:
                 replacement = existing
             else:
-                # Apply the strategy to generate replacement
-                index = counter.next(placeholder_type)
-                strategy_result = strategy.anonymize(
-                    value=original_value,
-                    entity_type=placeholder_type,
-                    index=index,
-                    context={"salt": result.entity_type},
-                )
-                replacement = strategy_result.text
+                # Check for fuzzy match - normalized value might already exist
+                normalized_value = self._normalize_pii_value(original_value, placeholder_type)
+                fuzzy_placeholder = mapping.get_placeholder(placeholder_type + "_normalized", normalized_value)
+                if fuzzy_placeholder:
+                    # Use the same replacement for fuzzy match
+                    replacement = mapping.get_original(fuzzy_placeholder)
+                else:
+                    # For synthetic strategy, check if we already have a synthetic value
+                    if strategy_type == StrategyType.SYNTHETIC:
+                        existing_synthetic = mapping.get_synthetic(original_value)
+                        if existing_synthetic:
+                            replacement = existing_synthetic
+                        else:
+                            # Check fuzzy synthetic match
+                            normalized_synthetic = mapping.get_synthetic(normalized_value)
+                            if normalized_synthetic:
+                                replacement = normalized_synthetic
+                            else:
+                                # Generate new synthetic value
+                                index = counter.next(placeholder_type)
+                                strategy_result = strategy.anonymize(
+                                    value=original_value,
+                                    entity_type=placeholder_type,
+                                    index=index,
+                                    context={},
+                                )
+                                replacement = strategy_result.text
 
-                # Only add to mapping if the strategy supports deanonymization
-                if strategy_result.can_deanonymize:
-                    mapping.add(placeholder_type, original_value, replacement)
+                                # Store as synthetic mapping
+                                mapping.add_synthetic(placeholder_type, original_value, replacement)
+                                # Also store normalized mapping for fuzzy matching
+                                if normalized_value != original_value:
+                                    mapping.add_synthetic(placeholder_type + "_normalized", normalized_value, replacement)
+                    else:
+                        # Apply the strategy to generate replacement
+                        index = counter.next(placeholder_type)
+                        strategy_result = strategy.anonymize(
+                            value=original_value,
+                            entity_type=placeholder_type,
+                            index=index,
+                            context={"salt": result.entity_type},
+                        )
+                        replacement = strategy_result.text
+
+                        # Only add to mapping if the strategy supports deanonymization
+                        if strategy_result.can_deanonymize:
+                            mapping.add(placeholder_type, original_value, replacement)
+                            # Also store normalized mapping for fuzzy matching
+                            if normalized_value != original_value:
+                                mapping.add(placeholder_type + "_normalized", normalized_value, replacement)
 
             # Replace in text
             anonymized_text = (
                 anonymized_text[: result.start] + replacement + anonymized_text[result.end :]
             )
 
-        return AnonymizationResult(
+        result = AnonymizationResult(
             text=anonymized_text,
             mapping=mapping,
             entities=list(analyzer_results),
+            allowlist_exemptions=allowlist_exemptions,
+            intent_exemptions=intent_exemptions,
         )
+
+        # Log exemptions for audit trail
+        if allowlist_exemptions:
+            self._log_allowlist_exemptions(allowlist_exemptions, session_id)
+        if intent_exemptions:
+            self._log_intent_exemptions(intent_exemptions, session_id)
+
+        return result
 
     def get_supported_entities(self) -> list[str]:
         """Get list of supported entity types.
@@ -357,6 +476,126 @@ class Anonymizer:
             List of entity type strings.
         """
         return list(self.SUPPORTED_ENTITIES)
+
+    def _log_allowlist_exemptions(
+        self, exemptions: list[dict], session_id: Optional[str]
+    ) -> None:
+        """Log allowlist exemptions for audit trail.
+
+        Args:
+            exemptions: List of exempted entities with their details.
+            session_id: Optional session identifier.
+        """
+        try:
+            from pii_airlock.audit.logger import get_audit_logger
+            import logging
+
+            logger = get_audit_logger()
+            if not logger.enabled:
+                return
+
+            # Log each exemption
+            for exemption in exemptions:
+                # Use sync logging to avoid async issues in sync context
+                logging.info(
+                    "Allowlist exemption: %s (%s)",
+                    exemption.get("original_value"),
+                    exemption.get("entity_type"),
+                )
+
+                # Try to schedule async logging if event loop is running
+                try:
+                    import asyncio
+
+                    try:
+                        loop = asyncio.get_running_loop()
+                        # Schedule async log as a task (fire and forget)
+                        asyncio.create_task(
+                            logger.log(
+                                event_type="allowlist_exempt",
+                                entity_type=exemption.get("entity_type"),
+                                metadata={
+                                    "original_value": exemption.get("original_value"),
+                                    "session_id": session_id,
+                                    "exemption_reason": "allowlist_match",
+                                },
+                            )
+                        )
+                    except RuntimeError:
+                        # No event loop running, skip async logging
+                        pass
+                except Exception:
+                    # Skip async logging if it fails
+                    pass
+        except Exception:
+            # Silently fail if audit logging is not available
+            pass
+
+    def _log_intent_exemptions(
+        self, exemptions: list[dict], session_id: Optional[str]
+    ) -> None:
+        """Log intent exemptions for audit trail.
+
+        Args:
+            exemptions: List of exempted entities with their details.
+            session_id: Optional session identifier.
+        """
+        try:
+            import logging
+
+            # Log each exemption
+            for exemption in exemptions:
+                logging.info(
+                    "Intent exemption: %s (%s) - reason: %s",
+                    exemption.get("original_value"),
+                    exemption.get("entity_type"),
+                    exemption.get("reason", "question_context"),
+                )
+        except Exception:
+            # Silently fail if logging fails
+            pass
+
+    @property
+    def intent_detector(self):
+        """Get or create the intent detector instance."""
+        if self._intent_detector is None:
+            from pii_airlock.core.intent_detector import get_intent_detector
+            self._intent_detector = get_intent_detector()
+        return self._intent_detector
+
+    def _check_intent_context(
+        self,
+        text: str,
+        entity_start: int,
+        entity_end: int,
+        entity_type: str,
+    ) -> tuple[bool, str]:
+        """Check if an entity is in question context.
+
+        Args:
+            text: The full text containing the entity.
+            entity_start: Start position of the entity.
+            entity_end: End position of the entity.
+            entity_type: The type of entity (PERSON, PHONE, etc).
+
+        Returns:
+            Tuple of (should_preserve, reason).
+        """
+        # Only check intent for certain entity types
+        # (PII types like phone, email, etc should always be anonymized in statements)
+        question_favoring_types = {"PERSON", "ORGANIZATION", "LOCATION"}
+
+        if entity_type not in question_favoring_types:
+            return (False, "entity_type_not_favoring")
+
+        try:
+            intent_result = self.intent_detector.is_question_context(
+                text, entity_start, entity_end
+            )
+            return (intent_result.is_question, intent_result.reason)
+        except Exception:
+            # If intent detection fails, default to False (anonymize)
+            return (False, "intent_detection_failed")
 
     def _remove_overlapping_entities(
         self,
@@ -396,3 +635,58 @@ class Anonymizer:
                 filtered.append(result)
 
         return filtered
+
+    def _get_compliance_preset_strategy_config(self) -> Optional[StrategyConfig]:
+        """Get strategy configuration from the active compliance preset.
+
+        Returns:
+            StrategyConfig from the active preset, or None if no preset is active.
+        """
+        try:
+            from pii_airlock.api.compliance_api import get_active_strategy_config
+            return get_active_strategy_config()
+        except ImportError:
+            return None
+        except Exception:
+            return None
+
+    def _normalize_pii_value(self, value: str, entity_type: str) -> str:
+        """Normalize a PII value for fuzzy matching.
+
+        Removes common formatting variations to detect equivalent values.
+        For example:
+        - Phone: "138-0013-8000" -> "13800138000"
+        - Phone: "138 0013 8000" -> "13800138000"
+        - ID Card: "110101 19900307 7758" -> "110101199003077758"
+
+        Args:
+            value: The PII value to normalize.
+            entity_type: The type of PII entity.
+
+        Returns:
+            Normalized value for comparison.
+        """
+        import re
+
+        entity_upper = entity_type.upper()
+
+        # Remove all whitespace
+        normalized = re.sub(r'\s+', '', value)
+
+        # For phone numbers, remove common separators
+        if "PHONE" in entity_upper:
+            normalized = re.sub(r'[-—–\(\)]', '', normalized)
+
+        # For ID cards, remove spaces and dashes
+        if "ID_CARD" in entity_upper or "IDCARD" in entity_upper:
+            normalized = re.sub(r'[-—–\s]', '', normalized)
+
+        # For credit cards, remove spaces and dashes
+        if "CREDIT_CARD" in entity_upper:
+            normalized = re.sub(r'[-—–\s]', '', normalized)
+
+        # For email, convert to lowercase for comparison
+        if "EMAIL" in entity_upper:
+            normalized = normalized.lower()
+
+        return normalized

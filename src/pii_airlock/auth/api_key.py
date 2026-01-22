@@ -160,7 +160,7 @@ class APIKeyStore:
                 "event": "api_key_created",
                 "key_id": key_id,
                 "tenant_id": tenant_id,
-                "name": name,
+                "key_name": name,
             },
         )
 

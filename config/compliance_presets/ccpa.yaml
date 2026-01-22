@@ -1,0 +1,125 @@
+# CCPA Compliance Preset
+# 加利福尼亚消费者隐私法案 (California Consumer Privacy Act) 合规配置
+#
+# CCPA 要点:
+# - 消费者有权知道其数据是否被出售/披露
+# - 有权删除其数据
+# - 有权选择退出数据出售
+# - 不得因行使权利而歧视消费者
+
+name: "CCPA Compliance"
+description: "加利福尼亚消费者隐私法案合规配置，适用于处理加州居民数据"
+version: "1.0"
+region: ["US-CA"]
+language: ["en"]
+
+# PII 类型定义 - CCPA 关注的个人信息
+pii_types:
+  - PERSON               # 姓名
+  - EMAIL_ADDRESS        # 邮箱
+  - PHONE_NUMBER         # 电话
+  - IP_ADDRESS           # IP地址
+  - LOCATION             # 位置（精确到地理围栏）
+  - DATE_TIME            # 日期（生日等）
+  - POSTAL_CODE          # 邮编（CCPA 特别关注）
+  - LICENSE_PLATE        # 车牌号
+  - DRIVER_LICENSE       # 驾照
+  - SSN                  # 社会保障号
+  - CREDIT_CARD          # 信用卡
+  - BANK_ACCOUNT         # 银行账户
+
+# 脱敏策略配置
+strategies:
+  # 默认策略
+  default: "synthetic"
+
+  # 个人标识符
+  PERSON: "synthetic"
+  EMAIL_ADDRESS: "mask"
+  PHONE_NUMBER: "mask"
+
+  # 位置信息 - CCPA 要求保护精确位置
+  LOCATION: "redact"
+  POSTAL_CODE: "mask"  # 邮编保留部分信息
+
+  # IP 地址
+  IP_ADDRESS: "mask"
+
+  # 身份证件
+  DRIVER_LICENSE: "mask"
+  SSN: "redact"
+
+  # 金融信息
+  CREDIT_CARD: "mask"
+  BANK_ACCOUNT: "mask"
+
+  # 其他
+  DATE_TIME: "placeholder"
+  URL: "placeholder"
+  LICENSE_PLATE: "mask"
+
+# 数据保留策略
+retention:
+  mapping_ttl: 600  # 10分钟（CCPA 允许合理的业务需要）
+
+  audit_retention_days: 730  # 2年（加州诉讼期）
+
+  log_sensitive_content: false
+
+# 防幻觉配置
+anonymization:
+  inject_prompt: true
+  inject_prompt_template: |
+    [SYSTEM NOTICE] This conversation contains anonymized personal data per CCPA compliance.
+    - Placeholders like <PERSON_1>, <EMAIL_1> represent anonymized information.
+    - Do NOT attempt to identify or reverse-engineure original values.
+    - Respond naturally to the anonymized content.
+
+# 合规检查规则
+compliance_rules:
+  # 数据出售检查（CCPA 核心关注点）
+  data_sale:
+    enabled: true
+    log_data_access: true
+
+  # 选择退出机制
+  opt_out:
+    enabled: true
+    respect_do_not_sell: true
+
+  # 消费者权利
+  consumer_rights:
+    # 知情权
+    right_to_know: true
+    # 删除权
+    right_to_delete: true
+    # 选择退出权
+    right_to_opt_out: true
+
+# 风险评分配置
+risk_scoring:
+  high_risk_types:
+    - SSN
+    - DRIVER_LICENSE
+    - BANK_ACCOUNT
+    - CREDIT_CARD
+
+  medium_risk_types:
+    - EMAIL_ADDRESS
+    - PHONE_NUMBER
+    - POSTAL_CODE
+    - IP_ADDRESS
+
+# 自定义模式（CCPA 特定）
+custom_patterns:
+  - name: ca_zip_code
+    entity_type: CA_ZIP_CODE
+    regex: "\\b9[0-9]{4}\\b"
+    score: 0.9
+    context: ["zip", "postal", "邮编"]
+
+  - name: ca_driver_license
+    entity_type: CA_DRIVER_LICENSE
+    regex: "\\b[A-Z][0-9]{7}\\b"
+    score: 0.85
+    context: ["driver", "license", "驾照"]

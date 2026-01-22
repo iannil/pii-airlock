@@ -6,7 +6,7 @@
 
 PII-AIRLOCK（敏感信息气闸）是一个中间件/反向代理，用于在调用公有 LLM API 时保护敏感个人信息。它部署在企业系统与公有 LLM（OpenAI、Claude）之间，实时进行 PII 检测、脱敏和回填。
 
-**状态**：Phase 5 生产优化已完成。支持结构化日志、Prometheus 监控、API 限流、连接池优化、自定义 PII 规则、Web UI 测试界面、完整的 OpenAI API 兼容接口。
+**状态**：Phase 7.1 Web管理界面已完成。支持结构化日志、Prometheus 监控、API 限流、连接池优化、自定义 PII 规则、Web UI 测试界面、可视化调试界面、管理控制台、完整的 OpenAI API 兼容接口。
 
 ## 技术栈
 
@@ -51,23 +51,38 @@ pii-airlock/
 ├── Dockerfile                  # Docker 镜像
 ├── docker-compose.yml          # 容器编排
 ├── config/                     # 配置文件
-│   └── custom_patterns.example.yaml  # 自定义规则示例
+│   ├── custom_patterns.example.yaml  # 自定义规则示例
+│   ├── compliance_presets/     # 合规预设配置
+│   │   ├── gdpr.yaml           # GDPR 合规配置
+│   │   ├── ccpa.yaml           # CCPA 合规配置
+│   │   ├── pipl.yaml           # PIPL 合规配置
+│   │   └── financial.yaml      # 金融合规配置
+│   └── allowlists/             # 白名单目录
+│       ├── public_figures.txt  # 公众人物库
+│       └── common_locations.txt # 常见地名
 ├── src/pii_airlock/
 │   ├── main.py                 # 服务入口
 │   ├── config/                 # 配置加载
-│   │   └── pattern_loader.py   # YAML 配置加载器
+│   │   ├── pattern_loader.py   # YAML 配置加载器
+│   │   └── compliance_loader.py # 合规预设加载器
 │   ├── core/                   # 核心引擎
 │   │   ├── anonymizer.py       # 脱敏引擎
 │   │   ├── deanonymizer.py     # 回填引擎
 │   │   ├── mapping.py          # PII映射管理
 │   │   ├── counter.py          # 占位符计数器
-│   │   └── stream_buffer.py    # 流式缓冲处理器
+│   │   ├── stream_buffer.py    # 流式缓冲处理器
+│   │   ├── strategies.py       # 脱敏策略
+│   │   ├── synthetic/          # 仿真数据生成
+│   │   └── fuzzy/              # 模糊匹配引擎
 │   ├── api/                    # API 层
 │   │   ├── routes.py           # FastAPI 路由 (含 Web UI)
 │   │   ├── proxy.py            # 代理逻辑
 │   │   ├── models.py           # Pydantic 模型
 │   │   ├── middleware.py       # 请求日志中间件
-│   │   └── limiter.py          # API 限流配置
+│   │   ├── limiter.py          # API 限流配置
+│   │   ├── compliance_api.py   # 合规管理 API
+│   │   ├── allowlist_api.py    # 白名单管理 API
+│   │   └── audit_api.py        # 审计日志 API
 │   ├── logging/                # 日志模块
 │   │   └── setup.py            # 日志配置
 │   ├── metrics/                # 监控模块
@@ -75,13 +90,23 @@ pii-airlock/
 │   ├── storage/                # 存储层
 │   │   ├── redis_store.py      # Redis 存储
 │   │   └── memory_store.py     # 内存存储
+│   ├── audit/                  # 审计日志模块
+│   │   ├── models.py           # 审计事件模型
+│   │   ├── store.py            # 审计存储
+│   │   └── logger.py           # 审计日志器
+│   ├── static/                 # 静态文件
+│   │   ├── debug.html          # 可视化调试界面
+│   │   └── admin.html          # 管理控制台
 │   └── recognizers/            # 识别器
 │       ├── registry.py         # 识别器注册
 │       ├── custom_pattern.py   # 自定义模式识别器
 │       ├── zh_phone.py         # 手机号识别
 │       ├── zh_id_card.py       # 身份证识别
-│       └── zh_person.py        # 姓名识别
-└── tests/                      # 测试用例 (151 个测试)
+│       ├── zh_person.py        # 姓名识别
+│       ├── allowlist.py        # 白名单识别器
+│       ├── entropy_detector.py # 高熵值检测器
+│       └── secret_scanner/     # 秘密扫描器
+└── tests/                      # 测试用例
 ```
 
 ## 使用方式
@@ -185,6 +210,22 @@ print(restored.text)  # 张三的电话是13800138000
 - 输入文本测试脱敏效果
 - 查看占位符与原始值的映射关系
 - 无需调用 LLM 即可验证 PII 识别
+
+## 可视化调试界面
+
+访问 `http://localhost:8000/debug` 可使用可视化调试界面：
+- 双屏对照原始文本与脱敏结果
+- PII 高亮显示，颜色区分不同类型
+- 交互式工具提示显示详细信息
+- 导出映射数据为 JSON
+
+## 管理控制台
+
+访问 `http://localhost:8000/admin` 可使用管理控制台：
+- **仪表盘**：系统统计、最近活动、实时状态
+- **合规配置**：激活/切换合规预设 (GDPR/CCPA/PIPL/Financial)
+- **白名单管理**：添加/删除白名单条目、批量导入
+- **审计日志**：查询、过滤、导出审计日志
 
 ## 自定义 PII 规则
 

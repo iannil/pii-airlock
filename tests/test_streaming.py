@@ -10,6 +10,7 @@ from pii_airlock.api.proxy import ProxyService
 from pii_airlock.api.models import ChatCompletionRequest, Message
 from pii_airlock.core.mapping import PIIMapping
 from pii_airlock.storage.memory_store import MemoryStore
+from pii_airlock.core.anonymizer import Anonymizer
 
 
 def make_sse_line(content: str = None, finish_reason: str = None, done: bool = False) -> str:
@@ -83,10 +84,13 @@ async def mock_client_context(mock_client):
 @pytest.fixture
 def proxy():
     """Create a proxy service for testing."""
+    # Create anonymizer with intent detection and allowlist disabled for consistent testing
+    anonymizer = Anonymizer(enable_intent_detection=False, enable_allowlist=False)
     return ProxyService(
         upstream_url="https://api.example.com",
         api_key="test-key",
         inject_anti_hallucination=False,  # Simplify tests
+        anonymizer=anonymizer,
     )
 
 

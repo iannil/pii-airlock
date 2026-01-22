@@ -63,3 +63,16 @@ QUOTA_EXCEEDED = Counter(
     "Total quota limit violations",
     ["tenant_id", "quota_type"],
 )
+
+# Secret scanning metrics
+SECRET_DETECTED = Counter(
+    "pii_airlock_secret_detected_total",
+    "Total secrets detected in requests",
+    ["secret_type", "risk_level"],
+)
+
+SECRET_BLOCKED = Counter(
+    "pii_airlock_secret_blocked_total",
+    "Total requests blocked due to secrets",
+    ["secret_type"],
+)

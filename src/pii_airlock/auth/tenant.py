@@ -131,7 +131,7 @@ class TenantConfig:
                 extra={
                     "event": "tenant_added",
                     "tenant_id": tenant.tenant_id,
-                    "name": tenant.name,
+                    "tenant_name": tenant.name,
                 },
             )
 

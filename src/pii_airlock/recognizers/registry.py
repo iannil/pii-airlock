@@ -84,7 +84,41 @@ def create_analyzer_with_chinese_support(
                 recognizer = create_recognizer_from_config(pattern, language)
                 registry.add_recognizer(recognizer)
 
+    # Load custom patterns from active compliance preset
+    _load_compliance_preset_patterns(registry, language)
+
     return AnalyzerEngine(nlp_engine=nlp_engine, registry=registry)
+
+
+def _load_compliance_preset_patterns(registry: RecognizerRegistry, language: str) -> None:
+    """Load custom patterns from the active compliance preset.
+
+    Args:
+        registry: The recognizer registry to add patterns to.
+        language: The language code for the recognizers.
+    """
+    try:
+        from pii_airlock.api.compliance_api import get_active_custom_patterns
+        from pii_airlock.recognizers.custom_pattern import create_recognizer_from_pattern
+
+        custom_patterns = get_active_custom_patterns()
+        if not custom_patterns:
+            return
+
+        for pattern in custom_patterns:
+            try:
+                recognizer = create_recognizer_from_pattern(pattern, language)
+                registry.add_recognizer(recognizer)
+            except Exception as e:
+                import warnings
+
+                warnings.warn(f"Failed to create recognizer for pattern {pattern.name}: {e}")
+    except ImportError:
+        # Compliance module not available
+        pass
+    except Exception:
+        # Silently fail if preset patterns can't be loaded
+        pass
 
 
 def get_supported_entities() -> list[str]:

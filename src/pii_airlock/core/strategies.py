@@ -28,6 +28,7 @@ class StrategyType(str, Enum):
     HASH = "hash"
     MASK = "mask"
     REDACT = "redact"
+    SYNTHETIC = "synthetic"  # 使用语义相似的假数据替换
 
 
 @dataclass
@@ -253,12 +254,75 @@ class RedactStrategy(AnonymizationStrategy):
         return StrategyResult(text=self._marker, can_deanonymize=False)
 
 
+class SyntheticStrategy(AnonymizationStrategy):
+    """Replace PII with semantically similar synthetic data.
+
+    This strategy generates realistic fake data that preserves the
+    semantic characteristics of the original PII, allowing LLMs
+    to maintain context while protecting privacy.
+
+    Example:
+        - "张三" -> "李四"
+        - "13800138000" -> "13912345678"
+        - "test@example.com" -> "user@163.com"
+
+    This strategy supports deanonymization through the mapping metadata.
+    """
+
+    @property
+    def name(self) -> str:
+        return StrategyType.SYNTHETIC
+
+    @property
+    def supports_deanonymization(self) -> bool:
+        return True
+
+    def __init__(self, seed: int = 42, **kwargs) -> None:
+        """Initialize the synthetic strategy.
+
+        Args:
+            seed: Random seed for deterministic generation.
+            **kwargs: Additional parameters passed to generators.
+        """
+        self._seed = seed
+        self._generator = None  # Lazy initialization
+
+    def _get_generator(self):
+        """Get or create the synthetic data generator."""
+        if self._generator is None:
+            from pii_airlock.core.synthetic.generator import SyntheticDataGenerator
+            self._generator = SyntheticDataGenerator(seed=self._seed)
+        return self._generator
+
+    def anonymize(
+        self,
+        value: str,
+        entity_type: str,
+        index: int,
+        context: dict[str, Any],
+    ) -> StrategyResult:
+        """Generate synthetic replacement for the PII value."""
+        generator = self._get_generator()
+        mapping = generator.generate(value, entity_type)
+
+        # Store mapping in context for deanonymization
+        if "synthetic_mappings" not in context:
+            context["synthetic_mappings"] = []
+        context["synthetic_mappings"].append(mapping)
+
+        return StrategyResult(
+            text=mapping.synthetic,
+            can_deanonymize=True,
+        )
+
+
 # Strategy registry
 _STRATEGIES: dict[StrategyType, AnonymizationStrategy] = {
     StrategyType.PLACEHOLDER: PlaceholderStrategy(),
     StrategyType.HASH: HashStrategy(),
     StrategyType.MASK: MaskStrategy(),
     StrategyType.REDACT: RedactStrategy(),
+    StrategyType.SYNTHETIC: SyntheticStrategy(),
 }
 
 

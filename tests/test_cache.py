@@ -272,8 +272,8 @@ class TestLLMCache:
         # Verify it exists
         assert cache.get("key", "tenant-1") is not None
 
-        # Delete it
-        success = cache.delete("key")
+        # Delete it (need to provide tenant_id for proper isolation)
+        success = cache.delete("key", "tenant-1")
         assert success is True
 
         # Verify it's gone

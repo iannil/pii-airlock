@@ -20,6 +20,21 @@ class MappingEntry:
     original_value: str
     placeholder: str
     created_at: datetime = field(default_factory=datetime.now)
+    strategy: Optional[str] = None  # "placeholder", "hash", "synthetic", etc.
+
+
+@dataclass
+class SyntheticMapping:
+    """A synthetic data mapping entry.
+
+    Maps synthetic values back to original values for deanonymization.
+    Used with the "synthetic" anonymization strategy.
+    """
+
+    entity_type: str
+    original_value: str
+    synthetic_value: str
+    created_at: datetime = field(default_factory=datetime.now)
 
 
 class PIIMapping:
@@ -39,6 +54,11 @@ class PIIMapping:
         '张三'
         >>> mapping.get_placeholder("PERSON", "张三")
         '<PERSON_1>'
+
+        >>> # Synthetic data mapping
+        >>> mapping.add_synthetic("PERSON", "张三", "李四")
+        >>> mapping.get_original_from_synthetic("李四")
+        '张三'
     """
 
     def __init__(self, session_id: Optional[str] = None) -> None:
@@ -58,6 +78,13 @@ class PIIMapping:
 
         # Full entries for metadata
         self._entries: list[MappingEntry] = []
+
+        # Synthetic mappings: {synthetic_value: SyntheticMapping}
+        self._synthetic_mappings: dict[str, SyntheticMapping] = {}
+
+        # Reverse synthetic mappings: {original_value: synthetic_value}
+        # For quick lookup to avoid generating the same synthetic value twice
+        self._synthetic_reverse: dict[str, str] = {}
 
     def add(
         self,
@@ -182,18 +209,86 @@ class PIIMapping:
             self._forward.clear()
             self._reverse.clear()
             self._entries.clear()
+            self._synthetic_mappings.clear()
+            self._synthetic_reverse.clear()
 
     def __len__(self) -> int:
         """Return total number of mappings."""
         with self._lock:
-            return len(self._reverse)
+            return len(self._reverse) + len(self._synthetic_mappings)
 
     def __contains__(self, placeholder: str) -> bool:
         """Check if placeholder exists."""
         with self._lock:
-            return placeholder in self._reverse
+            return placeholder in self._reverse or placeholder in self._synthetic_mappings
 
     def __repr__(self) -> str:
         """Return string representation."""
         with self._lock:
-            return f"PIIMapping(session_id={self.session_id}, entries={len(self._entries)})"
+            return f"PIIMapping(session_id={self.session_id}, entries={len(self._entries)}, synthetic={len(self._synthetic_mappings)})"
+
+    # Synthetic mapping methods
+
+    def add_synthetic(
+        self,
+        entity_type: str,
+        original_value: str,
+        synthetic_value: str,
+    ) -> None:
+        """Add a synthetic data mapping entry.
+
+        Args:
+            entity_type: The PII type (PERSON, PHONE, etc.).
+            original_value: The original PII text.
+            synthetic_value: The synthetic replacement text.
+        """
+        with self._lock:
+            mapping = SyntheticMapping(
+                entity_type=entity_type,
+                original_value=original_value,
+                synthetic_value=synthetic_value,
+            )
+            self._synthetic_mappings[synthetic_value] = mapping
+            self._synthetic_reverse[original_value] = synthetic_value
+
+    def get_synthetic(self, original_value: str) -> Optional[str]:
+        """Get synthetic value for an original value.
+
+        Args:
+            original_value: The original PII text.
+
+        Returns:
+            The synthetic value, or None if not found.
+        """
+        with self._lock:
+            return self._synthetic_reverse.get(original_value)
+
+    def get_original_from_synthetic(self, synthetic_value: str) -> Optional[str]:
+        """Get original value for a synthetic value.
+
+        Args:
+            synthetic_value: The synthetic replacement text.
+
+        Returns:
+            The original PII value, or None if not found.
+        """
+        with self._lock:
+            mapping = self._synthetic_mappings.get(synthetic_value)
+            return mapping.original_value if mapping else None
+
+    def get_synthetic_mapping(self, synthetic_value: str) -> Optional[SyntheticMapping]:
+        """Get the full synthetic mapping entry.
+
+        Args:
+            synthetic_value: The synthetic replacement text.
+
+        Returns:
+            The SyntheticMapping entry, or None if not found.
+        """
+        with self._lock:
+            return self._synthetic_mappings.get(synthetic_value)
+
+    def has_synthetic_mappings(self) -> bool:
+        """Check if this mapping has any synthetic entries."""
+        with self._lock:
+            return len(self._synthetic_mappings) > 0

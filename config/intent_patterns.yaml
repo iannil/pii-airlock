@@ -1,0 +1,114 @@
+# Intent Detection Patterns for PII Anonymization
+#
+# This configuration file defines patterns for detecting whether text is
+# in a "question" or "statement" context, which helps determine whether
+# PII entities should be preserved or anonymized.
+#
+# Key concept:
+# - Question context (asking about someone/something): Preserve entity name
+# - Statement context (using someone's information): Anonymize entity
+#
+# Example:
+#   "Who is Xi Jinping?" -> Question, preserve "Xi Jinping"
+#   "Email Xi Jinping at..." -> Statement, anonymize "Xi Jinping"
+
+# Global settings
+settings:
+  # Number of characters around an entity to check for context
+  context_window: 50
+
+  # Confidence threshold for classification (0.0 to 1.0)
+  confidence_threshold: 0.7
+
+# Patterns that indicate the text is a QUESTION
+# When these patterns match, entity names are preserved
+question_patterns:
+  # Chinese question starters - Must match actual characters at the start
+  - pattern: '^[\s]*(\?|？|谁|何人|哪位|哪些|什么叫|什么是|请问|如何|怎么|多少|几|是不是|能否|可以)'
+    description: Chinese question words at start
+    confidence: 0.9
+
+  - pattern: '(是谁|是什么|怎么样|如何|吗\?|呢\?|吗？|呢？)$'
+    description: Chinese question endings
+    confidence: 0.85
+
+  # Request for information patterns
+  - pattern: '^[\s]*(请| kindly)?(告诉我|介绍一下|讲讲|说说|描述一下|解释一下)'
+    description: Request for information (with optional "请" at start)
+    confidence: 0.85
+
+  - pattern: '(告诉我|介绍一下|讲讲|说说|描述一下|解释一下).*(关于|有关|的)'
+    description: Request for information about something
+    confidence: 0.85
+
+  # Knowledge check patterns
+  - pattern: '(你知道|你知道.*吗|听说过|听说过.*吗)'
+    description: Knowledge check patterns
+    confidence: 0.8
+
+  # Search patterns
+  - pattern: '(查一下|查查|搜索|找一下|找找)'
+    description: Search/find patterns
+    confidence: 0.8
+
+  # English question starters
+  - pattern: '^[\s]*(Who|What|Where|When|Why|How|Which|Whose|Whom|Is|Are|Do|Does|Can|Could|Would|Should|Will|Would)\b'
+    description: English WH- and yes/no questions
+    confidence: 0.9
+
+  - pattern: '\?[\s]*$'
+    description: Ends with question mark
+    confidence: 0.9
+
+  # English information request patterns
+  - pattern: '(tell me|describe|explain|introduce).*(about|regarding)'
+    description: English information request
+    confidence: 0.85
+
+  - pattern: '(do you know|have you heard)'
+    description: English knowledge check
+    confidence: 0.8
+
+# Patterns that indicate the entity is being asked ABOUT
+# These look for specific question patterns around the entity
+question_context_patterns:
+  - pattern: '(是|是哪|是誰|是谁|叫什么|叫啥|是什么|what is|who is)'
+    description: Identity question around entity
+    confidence: 0.85
+
+  - pattern: '(介绍|描述|explain|describe|introduce|tell me about)'
+    description: Request for description about entity
+    confidence: 0.85
+
+# Patterns that indicate the entity is being used in a STATEMENT
+# When these patterns match, entities are anonymized (unless allowlisted)
+statement_context_patterns:
+  # Communication action patterns
+  - pattern: '(联系|呼叫|发邮件|发送|写信|给|告诉|通知|提醒)'
+    description: Chinese communication actions
+    confidence: 0.9
+
+  - pattern: '(call|email|text|send|write|notify|message)'
+    description: English communication actions
+    confidence: 0.9
+
+  # Possessive patterns (indicating the entity's PII is being referenced)
+  - pattern: '(的电话|的邮箱|的地址|的身份证|的手机|的号码|''s phone|''s email|''s address|''s number)'
+    description: Possessive PII reference patterns
+    confidence: 0.95
+
+# Entity types that are more likely to be asked about (vs used)
+question_favoring_entities:
+  - PERSON
+  - ORGANIZATION
+  - LOCATION
+
+# Entity types that should always be anonymized in statements
+always_anonymize_in_statements:
+  - PHONE_NUMBER
+  - EMAIL_ADDRESS
+  - CREDIT_CARD
+  - ZH_ID_CARD
+  - IP_ADDRESS
+  - IBAN_CODE
+  - BANK_ACCOUNT

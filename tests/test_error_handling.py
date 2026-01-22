@@ -69,7 +69,7 @@ class TestAnonymizerErrors:
         assert "😊" in result.text
 
     def test_anonymize_mixed_languages(self) -> None:
-        anonymizer = Anonymizer()
+        anonymizer = Anonymizer(enable_intent_detection=False, enable_allowlist=False)
         text = "张三 (John) 的电话是13800138000"
 
         result = anonymizer.anonymize(text)
@@ -238,7 +238,7 @@ class TestEdgeCases:
         assert result.text is not None
 
     def test_anonymize_repeated_same_pii(self) -> None:
-        anonymizer = Anonymizer()
+        anonymizer = Anonymizer(enable_intent_detection=False, enable_allowlist=False)
         text = "张三给张三打了电话"
 
         result = anonymizer.anonymize(text)

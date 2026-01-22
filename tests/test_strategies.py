@@ -271,7 +271,7 @@ class TestAnonymizerWithStrategies:
     """Tests for Anonymizer integration with strategies."""
 
     def test_anonymizer_with_default_strategy(self) -> None:
-        anonymizer = Anonymizer()
+        anonymizer = Anonymizer(enable_intent_detection=False, enable_allowlist=False)
         result = anonymizer.anonymize("张三的电话是13800138000")
 
         # Should use placeholder by default
@@ -280,7 +280,7 @@ class TestAnonymizerWithStrategies:
 
     def test_anonymizer_with_mask_strategy(self) -> None:
         strategy_config = StrategyConfig({"PHONE_NUMBER": StrategyType.MASK})
-        anonymizer = Anonymizer(strategy_config=strategy_config)
+        anonymizer = Anonymizer(strategy_config=strategy_config, enable_intent_detection=False)
 
         result = anonymizer.anonymize("电话是13800138000")
 
@@ -289,7 +289,7 @@ class TestAnonymizerWithStrategies:
 
     def test_anonymizer_with_redact_strategy(self) -> None:
         strategy_config = StrategyConfig({"PERSON": StrategyType.REDACT})
-        anonymizer = Anonymizer(strategy_config=strategy_config)
+        anonymizer = Anonymizer(strategy_config=strategy_config, enable_intent_detection=False, enable_allowlist=False)
 
         result = anonymizer.anonymize("张三来了")
 
@@ -298,7 +298,7 @@ class TestAnonymizerWithStrategies:
 
     def test_anonymizer_with_hash_strategy(self) -> None:
         strategy_config = StrategyConfig({"PERSON": StrategyType.HASH})
-        anonymizer = Anonymizer(strategy_config=strategy_config)
+        anonymizer = Anonymizer(strategy_config=strategy_config, enable_intent_detection=False, enable_allowlist=False)
 
         result = anonymizer.anonymize("张三来了")
 
@@ -313,7 +313,7 @@ class TestAnonymizerWithStrategies:
         os.environ["PII_AIRLOCK_STRATEGY_PERSON"] = "redact"
 
         try:
-            anonymizer = Anonymizer(load_strategies_from_env=True)
+            anonymizer = Anonymizer(load_strategies_from_env=True, enable_intent_detection=False)
             assert anonymizer.strategy_config.get_strategy("PERSON") == StrategyType.REDACT
         finally:
             del os.environ["PII_AIRLOCK_STRATEGY_PERSON"]
@@ -324,7 +324,7 @@ class TestAnonymizerWithStrategies:
             "PHONE_NUMBER": StrategyType.MASK,
             "EMAIL_ADDRESS": StrategyType.REDACT,
         })
-        anonymizer = Anonymizer(strategy_config=strategy_config)
+        anonymizer = Anonymizer(strategy_config=strategy_config, enable_intent_detection=False, enable_allowlist=False)
 
         result = anonymizer.anonymize("张三的电话是13800138000，邮箱是test@example.com")
 

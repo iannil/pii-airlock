@@ -112,7 +112,7 @@ class TestTenantConfig:
         config = TenantConfig()
 
         tenant = Tenant(
-            tenant_id="test-tenant",
+            tenant_id="test",
             name="Test",
             api_keys=["piiak_test_key1", "piiak_test_key2"],
         )
@@ -121,12 +121,12 @@ class TestTenantConfig:
         # Lookup by API key
         found = config.get_tenant_by_api_key("piiak_test_key1")
         assert found is not None
-        assert found.tenant_id == "test-tenant"
+        assert found.tenant_id == "test"
 
         # Lookup by prefix
         found = config.get_tenant_by_api_key("piiak_test_randomsuffix")
         assert found is not None
-        assert found.tenant_id == "test-tenant"
+        assert found.tenant_id == "test"
 
         # Non-existent key
         found = config.get_tenant_by_api_key("piiak_other_key")

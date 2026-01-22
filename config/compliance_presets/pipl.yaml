@@ -1,0 +1,197 @@
+# PIPL Compliance Preset
+# 中华人民共和国个人信息保护法 合规配置
+#
+# PIPL 要点:
+# - "告知-同意"原则
+# - 最小必要原则
+# - 敏感个人信息需单独同意
+# - 本地存储要求（关键信息基础设施运营者）
+# - 个人信息处理者需指定负责人
+
+name: "PIPL Compliance"
+description: "中华人民共和国个人信息保护法合规配置，适用于处理中国公民个人信息"
+version: "1.0"
+region: ["CN"]
+language: ["zh"]
+
+# PII 类型定义 - PIPL 关注的个人信息
+pii_types:
+  # 基础个人信息
+  - PERSON               # 姓名
+  - ZH_PERSON            # 中文姓名
+  - EMAIL_ADDRESS        # 邮箱
+  - PHONE_NUMBER         # 电话
+  - ZH_PHONE             # 中文手机号
+
+  # 敏感个人信息（需单独同意）
+  - ZH_ID_CARD           # 身份证号码（PIPL 明确的敏感信息）
+  - ID_CARD              # 身份证件
+  - PASSPORT             # 护照
+  - DRIVER_LICENSE       # 驾照
+  - BIOMETRIC            # 生物识别信息
+
+  # 金融信息
+  - CREDIT_CARD          # 信用卡
+  - BANK_ACCOUNT         # 银行账户
+
+  # 位置信息
+  - LOCATION             # 位置
+  - IP_ADDRESS           # IP地址
+
+  # 网络标识
+  - URL                  # URL
+  - IMEI                 # 设备标识
+
+  # 其他
+  - DATE_TIME            # 日期时间
+  - ADDRESS              # 地址
+  - POSTAL_CODE          # 邮编
+
+# 脱敏策略配置
+strategies:
+  # 默认策略
+  default: "synthetic"
+
+  # 姓名 - 合成替换保持语义
+  PERSON: "synthetic"
+  ZH_PERSON: "synthetic"
+
+  # 联系方式 - 掩码处理
+  EMAIL_ADDRESS: "mask"
+  PHONE_NUMBER: "mask"
+  ZH_PHONE: "mask"
+
+  # 身份证件 - PIPL 敏感信息，严格处理
+  ZH_ID_CARD: "redact"     # 身份证完全删除
+  ID_CARD: "mask"
+  PASSPORT: "mask"
+  DRIVER_LICENSE: "mask"
+
+  # 金融信息 - 掩码处理
+  CREDIT_CARD: "mask"
+  BANK_ACCOUNT: "mask"
+
+  # 位置信息 - 考虑本地存储要求
+  LOCATION: "redact"
+  ADDRESS: "redact"
+  IP_ADDRESS: "redact"
+
+  # 其他
+  BIOMETRIC: "redact"      # 生物信息完全删除
+  DATE_TIME: "placeholder"
+  URL: "placeholder"
+  POSTAL_CODE: "mask"
+
+# 数据保留策略
+retention:
+  mapping_ttl: 180  # 3分钟（PIPL 最小必要原则）
+
+  audit_retention_days: 365  # 1年（中国一般要求）
+
+  log_sensitive_content: false
+
+  # 本地存储提醒
+  local_storage_reminder: true
+
+# 防幻觉配置
+anonymization:
+  inject_prompt: true
+  inject_prompt_template: |
+    [系统提示] 本对话包含按《个人信息保护法》脱敏的个人信息。
+    - 占位符如 <PERSON_1>、<PHONE_1> 代表已脱敏的个人信息。
+    - 请勿尝试推测或还原原始值。
+    - 请自然地处理脱敏后的内容进行回复。
+    - 保持占位符格式不变。
+
+# 合规检查规则
+compliance_rules:
+  # 最小必要原则检查
+  data_minimization:
+    enabled: true
+    warn_on_excessive_pii: true
+
+  # 敏感个人信息单独同意
+  sensitive_consent:
+    enabled: true
+    sensitive_types:
+      - ZH_ID_CARD
+      - BIOMETRIC
+      - BANK_ACCOUNT
+      - LOCATION
+
+  # 告知同意原则
+  consent_management:
+    enabled: true
+    log_consent_events: true
+    require_explicit_consent: true
+
+  # 个人信息主体权利
+  subject_rights:
+    # 查阅复制权
+    access_enabled: true
+    # 更正补充权
+    correction_enabled: true
+    # 删除权
+    deletion_enabled: true
+    # 撤回同意权
+    consent_withdrawal: true
+
+# 风险评分配置
+risk_scoring:
+  # PIPL 定义的敏感个人信息
+  high_risk_types:
+    - ZH_ID_CARD
+    - BIOMETRIC
+    - BANK_ACCOUNT
+    - PASSPORT
+
+  medium_risk_types:
+    - PHONE_NUMBER
+    - ZH_PHONE
+    - EMAIL_ADDRESS
+    - LOCATION
+    - IP_ADDRESS
+
+# 自定义模式（PIPL 特定）
+custom_patterns:
+  - name: zh_wechat
+    entity_type: WECHAT_ID
+    regex: "(wxid_[a-zA-Z0-9]{16,}|[a-zA-Z0-9_-]{6,20})"
+    score: 0.75
+    context: ["微信", "wechat", "wx"]
+
+  - name: zh_qq
+    entity_type: QQ_NUMBER
+    regex: "\\b[1-9][0-9]{5,10}\\b"
+    score: 0.7
+    context: ["QQ", "qq", "Qq"]
+
+  - name: zh_alipay
+    entity_type: ALIPAY_ACCOUNT
+    regex: "(?:alipay)[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+    score: 0.85
+    context: ["支付宝", "alipay", "AliPay"]
+
+  - name: zh_uniform_social_credit
+    entity_type: SOCIAL_CREDIT_CODE
+    regex: "[0-9A-HJ-NPQRTUWXY]{2}\\d{6}[0-9A-HJ-NPQRTUWXY]{10}"
+    score: 0.9
+    context: ["统一社会信用代码", "信用代码", "税号"]
+
+# 特殊处理规则
+special_rules:
+  # 处理中文姓名的复杂场景
+  chinese_name_handling:
+    # 区分姓和名
+    separate_first_last: true
+    # 处理复姓
+    recognize_compound_surname: true
+    # 处理少数民族姓名
+    handle_minority_names: true
+
+  # 处理中文地址
+  chinese_address_handling:
+    # 识别省市区
+    parse_administrative_division: true
+    # 识别街道门牌
+    parse_street_address: true

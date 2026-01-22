@@ -20,6 +20,21 @@ from pii_airlock.metrics.collectors import (
 
 logger = get_logger(__name__)
 
+# Audit logging (lazy import)
+_audit_logger = None
+
+
+def _get_audit_logger():
+    """Lazy import of audit logger."""
+    global _audit_logger
+    if _audit_logger is None:
+        try:
+            from pii_airlock.audit import set_audit_context
+            _audit_logger = set_audit_context
+        except ImportError:
+            _audit_logger = False
+    return _audit_logger if _audit_logger is not False else None
+
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
     """Middleware for request logging and metrics.
@@ -50,6 +65,19 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         # Get endpoint for metrics
         endpoint = self._get_endpoint(request)
         method = request.method
+        client_ip = self._get_client_ip(request)
+        user_agent = request.headers.get("user-agent", "")
+        api_key = request.headers.get("authorization", "").replace("Bearer ", "")
+
+        # Set up audit context
+        set_audit_fn = _get_audit_logger()
+        if set_audit_fn:
+            set_audit_fn(
+                request_id=request_id,
+                source_ip=client_ip,
+                user_agent=user_agent,
+                api_key=api_key if api_key else None,
+            )
 
         # Track active requests
         ACTIVE_REQUESTS.inc()
@@ -63,7 +91,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                 "method": method,
                 "path": str(request.url.path),
                 "query": str(request.url.query) if request.url.query else None,
-                "client_ip": self._get_client_ip(request),
+                "client_ip": client_ip,
             },
         )
 
@@ -79,6 +107,14 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                     "error": str(e),
                 },
             )
+
+            # Audit error logging
+            if set_audit_fn:
+                try:
+                    from pii_airlock.audit import clear_audit_context
+                    clear_audit_context()
+                except ImportError:
+                    pass
             raise
         finally:
             # Calculate duration
@@ -113,6 +149,14 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                     "duration_ms": duration_ms,
                 },
             )
+
+            # Clear audit context
+            if set_audit_fn:
+                try:
+                    from pii_airlock.audit import clear_audit_context
+                    clear_audit_context()
+                except ImportError:
+                    pass
 
         # Add request ID header to response
         response.headers["X-Request-ID"] = request_id

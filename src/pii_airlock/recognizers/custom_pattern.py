@@ -71,3 +71,35 @@ def create_recognizers_from_configs(
         >>> print(f"Created {len(recognizers)} custom recognizers")
     """
     return [create_recognizer_from_config(config, language) for config in configs]
+
+
+def create_recognizer_from_pattern(
+    pattern,
+    language: str = "zh",
+) -> PatternRecognizer:
+    """Create a PatternRecognizer from a CustomPattern (from compliance preset).
+
+    Args:
+        pattern: CustomPattern object from compliance preset.
+        language: Language code for the recognizer (default: "zh").
+
+    Returns:
+        A configured PatternRecognizer instance.
+    """
+    pattern_obj = Pattern(
+        name=pattern.name,
+        regex=pattern.regex,
+        score=pattern.score,
+    )
+
+    # Generate a class-like name for the recognizer
+    name_parts = pattern.name.split("_")
+    class_name = "Custom" + "".join(part.title() for part in name_parts) + "Recognizer"
+
+    return PatternRecognizer(
+        supported_entity=pattern.entity_type,
+        patterns=[pattern_obj],
+        context=list(pattern.context) if pattern.context else [],
+        supported_language=language,
+        name=class_name,
+    )
