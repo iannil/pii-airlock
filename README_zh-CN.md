@@ -15,7 +15,7 @@
 
 ---
 
-**PII-AIRLOCK** 是一个开源中间件/反向代理，用于在使用公有 LLM API 时保护敏感个人信息。将其部署在您的应用程序和 LLM 提供商（OpenAI、Claude 等）之间，实时自动检测、匿名化和还原 PII。
+PII-AIRLOCK 是一个开源中间件/反向代理，用于在使用公有 LLM API 时保护敏感个人信息。将其部署在您的应用程序和 LLM 提供商（OpenAI、Claude 等）之间，实时自动检测、匿名化和还原 PII。
 
 </div>
 
@@ -27,8 +27,8 @@
 ┌─────────────────┐     ┌─────────────────────────────────────────┐     ┌─────────────────┐
 │                 │     │           PII-AIRLOCK (v1.2)            │     │                 │
 │  您的应用        │────▶│  ┌─────────┐    ┌─────────────────┐     │────▶│   OpenAI API    │
-│  (Dify/Flowise) │     │  │ 匿名化  │────│   映射存储      │     │     │   Claude API    │
-│                 │◀────│  └─────────┘    │   + 缓存        │     │◀────│   Azure OpenAI   │
+│  (Dify/Flowise) │     │  │ 匿名化   │────│  映射存储 + 缓存  │     │     │   Claude API    │
+│                 │◀────│  └─────────┘    └─────────────────┘     │◀────│   Azure OpenAI  │
 └─────────────────┘     └─────────────────────────────────────────┘     └─────────────────┘
                               ▲
                          多租户 │ API 密钥 │ 配额
@@ -39,37 +39,37 @@
 ### 基础能力
 
 | 特性 | 描述 |
-|-----|------|
-| **零代码集成** | 只需修改 `base_url` — 完全兼容 OpenAI API 格式 |
-| **智能匿名化** | 使用语义占位符（`<PERSON_1>`）让 LLM 自然理解 |
-| **流式支持** | 处理 SSE 流式响应，智能缓冲被拆分的占位符 |
-| **模糊恢复** | 即使 LLM 修改了占位符格式也能恢复 PII |
-| **自定义规则** | 通过 YAML 配置定义自己的 PII 模式 |
+| ----- | ------ |
+| 零代码集成 | 只需修改 `base_url` — 完全兼容 OpenAI API 格式 |
+| 智能匿名化 | 使用语义占位符（`<PERSON_1>`）让 LLM 自然理解 |
+| 流式支持 | 处理 SSE 流式响应，智能缓冲被拆分的占位符 |
+| 模糊恢复 | 即使 LLM 修改了占位符格式也能恢复 PII |
+| 自定义规则 | 通过 YAML 配置定义自己的 PII 模式 |
 
 ### 企业特性 (v1.2)
 
 | 特性 | 描述 |
-|-----|------|
-| **多租户** | 租户隔离，独立配置和限流 |
-| **响应缓存** | LLM 响应缓存，降低 API 成本和延迟 |
-| **配额管理** | 请求/token 配额，支持小时/日/月限制 |
-| **API 密钥管理** | 安全的 API 密钥创建和生命周期管理 |
-| **RBAC** | 基于角色的访问控制（管理员/操作员/访客/用户） |
-| **生产就绪** | 结构化日志、Prometheus 指标、限流 |
+| ----- | ------ |
+| 多租户 | 租户隔离，独立配置和限流 |
+| 响应缓存 | LLM 响应缓存，降低 API 成本和延迟 |
+| 配额管理 | 请求/token 配额，支持小时/日/月限制 |
+| API 密钥管理 | 安全的 API 密钥创建和生命周期管理 |
+| RBAC | 基于角色的访问控制（管理员/操作员/访客/用户） |
+| 生产就绪 | 结构化日志、Prometheus 指标、限流 |
 
 ### 脱敏策略
 
 | 策略 | 描述 | 示例 | 适用场景 |
-|-----|------|-----|---------|
-| **placeholder** | 类型化占位符 | `张三` → `<PERSON_1>` | LLM 处理（默认） |
-| **hash** | SHA256 哈希 | `张三` → `a1b2c3d4...` | 日志分析、数据去重 |
-| **mask** | 部分掩码 | `13800138000` → `138****8000` | UI 展示、客服 |
-| **redact** | 完全替换 | `test@example.com` → `[REDACTED]` | 最大隐私保护 |
+| ----- | ------ | ----- | --------- |
+| placeholder | 类型化占位符 | `张三` → `<PERSON_1>` | LLM 处理（默认） |
+| hash | SHA256 哈希 | `张三` → `a1b2c3d4...` | 日志分析、数据去重 |
+| mask | 部分掩码 | `13800138000` → `1388000` | UI 展示、客服 |
+| redact | 完全替换 | `test@example.com` → `[REDACTED]` | 最大隐私保护 |
 
 ## 支持的 PII 类型
 
 | 类型 | 占位符 | 示例 |
-|-----|--------|-----|
+| ----- | -------- | ----- |
 | 姓名 | `<PERSON_N>` | 张三 → `<PERSON_1>` |
 | 手机号 | `<PHONE_N>` | 13800138000 → `<PHONE_1>` |
 | 邮箱 | `<EMAIL_N>` | test@example.com → `<EMAIL_1>` |
@@ -151,26 +151,26 @@ docker run -p 8000:8000 -e OPENAI_API_KEY=sk-xxx pii-airlock
 ### 环境变量
 
 | 变量 | 说明 | 默认值 |
-|-----|------|--------|
-| **基础配置** |
+| ----- | ------ | -------- |
+| 基础配置 |
 | `OPENAI_API_KEY` | OpenAI API 密钥 | - |
 | `PII_AIRLOCK_UPSTREAM_URL` | 上游 LLM API 地址 | `https://api.openai.com` |
 | `PII_AIRLOCK_PORT` | 服务端口 | `8000` |
 | `PII_AIRLOCK_MAPPING_TTL` | 映射过期时间（秒） | `300` |
 | `PII_AIRLOCK_INJECT_PROMPT` | 注入防幻觉提示 | `true` |
-| **多租户 (v1.2)** |
+| 多租户 (v1.2) |
 | `PII_AIRLOCK_MULTI_TENANT_ENABLED` | 启用多租户模式 | `false` |
 | `PII_AIRLOCK_TENANT_CONFIG_PATH` | tenants.yaml 路径 | - |
-| **缓存 (v1.2)** |
+| 缓存 (v1.2) |
 | `PII_AIRLOCK_CACHE_ENABLED` | 启用响应缓存 | `false` |
 | `PII_AIRLOCK_CACHE_TTL` | 缓存 TTL（秒） | `3600` |
 | `PII_AIRLOCK_CACHE_MAX_SIZE` | 最大缓存条目数 | `10000` |
-| **配额 (v1.2)** |
+| 配额 (v1.2) |
 | `PII_AIRLOCK_QUOTA_CONFIG_PATH` | quotas.yaml 路径 | - |
-| **日志** |
+| 日志 |
 | `PII_AIRLOCK_LOG_LEVEL` | 日志级别 | `INFO` |
 | `PII_AIRLOCK_LOG_FORMAT` | 日志格式 (json/text) | `json` |
-| **限流** |
+| 限流 |
 | `PII_AIRLOCK_RATE_LIMIT` | 限流配置 | `60/minute` |
 | `PII_AIRLOCK_RATE_LIMIT_ENABLED` | 启用限流 | `true` |
 
@@ -209,23 +209,23 @@ export PII_AIRLOCK_CONFIG_PATH=./config/custom_patterns.yaml
 ### OpenAI 兼容 API
 
 | 端点 | 方法 | 说明 |
-|-----|------|-----|
+| ----- | ------ | ----- |
 | `/v1/chat/completions` | POST | 带 PII 保护的对话补全 |
 | `/v1/models` | GET | 列出可用模型 |
 
 ### 管理 API (v1.2)
 
 | 端点 | 方法 | 说明 |
-|-----|------|-----|
-| **租户管理** |
+| ----- | ------ | ----- |
+| 租户管理 |
 | `/api/v1/tenants` | GET | 列出所有租户 |
 | `/api/v1/tenants/{id}` | GET | 获取租户信息 |
-| **API 密钥管理** |
+| API 密钥管理 |
 | `/api/v1/keys` | POST/GET | 创建/列出 API 密钥 |
 | `/api/v1/keys/{id}` | DELETE | 撤销 API 密钥 |
-| **配额管理** |
+| 配额管理 |
 | `/api/v1/quota/usage` | GET | 获取配额使用情况 |
-| **缓存管理** |
+| 缓存管理 |
 | `/api/v1/cache/stats` | GET | 获取缓存统计 |
 | `/api/v1/cache` | DELETE | 清空缓存 |
 | `/api/v1/cache/stats/global` | GET | 全局缓存统计 |
@@ -233,7 +233,7 @@ export PII_AIRLOCK_CONFIG_PATH=./config/custom_patterns.yaml
 ### 监控与测试
 
 | 端点 | 说明 |
-|-----|------|
+| ----- | ------ |
 | `/health` | 健康检查 |
 | `/metrics` | Prometheus 指标 |
 | `/ui` | Web 测试界面 |
@@ -285,8 +285,8 @@ print(result.text)  # 张*的电话是[REDACTED]
 
 LLM 可能会修改占位符（如 `<PERSON_1>` → `<Person 1>`）。PII-AIRLOCK 通过以下方式处理：
 
-1. **系统提示注入**：指示 LLM 精确保留占位符
-2. **模糊匹配**：使用灵活的正则表达式匹配修改后的占位符
+1. 系统提示注入：指示 LLM 精确保留占位符
+2. 模糊匹配：使用灵活的正则表达式匹配修改后的占位符
 
 ## 开发指南
 
@@ -382,11 +382,11 @@ pii-airlock/
 
 ## 使用场景
 
-- **企业合规**：在使用 GPT-4/Claude 的同时满足 GDPR、CCPA、个人信息保护法要求
-- **低代码平台**：作为 Dify、Flowise、LangFlow 的网关
-- **医疗/金融**：安全地使用云 LLM 处理敏感数据
-- **开发测试**：在不暴露真实 PII 的情况下测试 LLM 应用
-- **多团队**：共享基础设施，配置和配额隔离
+- 企业合规：在使用 GPT-4/Claude 的同时满足 GDPR、CCPA、个人信息保护法要求
+- 低代码平台：作为 Dify、Flowise、LangFlow 的网关
+- 医疗/金融：安全地使用云 LLM 处理敏感数据
+- 开发测试：在不暴露真实 PII 的情况下测试 LLM 应用
+- 多团队：共享基础设施，配置和配额隔离
 
 ## 许可证
 
@@ -403,7 +403,7 @@ pii-airlock/
 
 <div align="center">
 
-**由 PII-AIRLOCK 团队用 ❤️ 制作**
+由 PII-AIRLOCK 团队用 ❤️ 制作
 
 [⭐ 在 GitHub 上关注我们](https://github.com/pii-airlock/pii-airlock) — 您的支持是我们前进的动力！
 
