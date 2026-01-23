@@ -4,6 +4,7 @@ Custom Recognizer Registry
 Sets up Presidio with Chinese language support and custom recognizers.
 """
 
+import logging
 from pathlib import Path
 from typing import Optional, Union
 
@@ -13,6 +14,9 @@ from presidio_analyzer.nlp_engine import NlpEngineProvider
 from pii_airlock.recognizers.zh_id_card import ChineseIdCardRecognizer
 from pii_airlock.recognizers.zh_phone import ChinesePhoneRecognizer
 from pii_airlock.recognizers.zh_person import ChinesePersonRecognizer
+
+# CORE-004 FIX: Add logger for proper error reporting
+logger = logging.getLogger(__name__)
 
 
 def create_analyzer_with_chinese_support(
@@ -116,9 +120,13 @@ def _load_compliance_preset_patterns(registry: RecognizerRegistry, language: str
     except ImportError:
         # Compliance module not available
         pass
-    except Exception:
-        # Silently fail if preset patterns can't be loaded
-        pass
+    except Exception as e:
+        # CORE-004 FIX: Log error instead of silently failing
+        logger.warning(
+            "Failed to load compliance preset patterns: %s",
+            str(e),
+            exc_info=True,
+        )
 
 
 def get_supported_entities() -> list[str]:

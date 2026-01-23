@@ -45,8 +45,11 @@ from pii_airlock.metrics.collectors import (
     QUOTA_EXCEEDED,
     SECRET_DETECTED,
     SECRET_BLOCKED,
+    ANONYMIZATION_DURATION,
+    DEANONYMIZATION_DURATION,
+    SECRET_SCAN_DURATION,
 )
-from pii_airlock.cache.llm_cache import LLMCache, get_cache_key
+from pii_airlock.cache.llm_cache import LLMCache, get_cache_key, CACHE_HITS, CACHE_MISSES
 from pii_airlock.auth.quota import QuotaType, check_quota as check_quota_limit
 
 # Audit logging (lazy import to avoid circular dependencies)
@@ -196,6 +199,9 @@ class ProxyService:
         Returns:
             Tuple of (anonymized messages, combined mapping).
         """
+        # OPS-006: Track anonymization latency
+        start_time = time.time()
+
         anonymizer = self._ensure_anonymizer()
         combined_mapping = PIIMapping(session_id=request_id)
         anonymized_messages = []
@@ -231,6 +237,9 @@ class ProxyService:
                     name=msg.name,
                 )
             )
+
+        # OPS-006: Record anonymization latency
+        ANONYMIZATION_DURATION.observe(time.time() - start_time)
 
         # Record PII detection metrics
         for entity_type, count in pii_counts.items():
@@ -372,12 +381,18 @@ class ProxyService:
         if interceptor is None:
             return False, ""
 
+        # OPS-006: Track secret scanning latency
+        start_time = time.time()
+
         # Convert messages to dict format for scanning
         messages_dict = [m.model_dump() for m in messages]
         result = interceptor.check_messages(
             messages_dict,
             context={"request_id": request_id},
         )
+
+        # Record secret scan duration
+        SECRET_SCAN_DURATION.observe(time.time() - start_time)
 
         if result.scan_result.matches:
             # Record metrics
@@ -441,7 +456,10 @@ class ProxyService:
         Returns:
             Text with placeholders replaced by original values.
         """
+        # OPS-006: Track deanonymization latency
+        start_time = time.time()
         result = self.deanonymizer.deanonymize(content, mapping)
+        DEANONYMIZATION_DURATION.observe(time.time() - start_time)
         return result.text
 
     def _check_cache(
@@ -465,6 +483,8 @@ class ProxyService:
 
         entry = self.cache.get(cache_key, tenant_id)
         if entry:
+            # OPS-004: Record cache hit
+            CACHE_HITS.labels(tenant_id=tenant_id, model=model).inc()
             logger.info(
                 "Cache hit for request",
                 extra={
@@ -475,6 +495,9 @@ class ProxyService:
                 },
             )
             return entry.response_data
+
+        # OPS-004: Record cache miss
+        CACHE_MISSES.labels(tenant_id=tenant_id, model=model).inc()
         return None
 
     def _store_cache(
@@ -853,11 +876,23 @@ class ProxyService:
             },
         )
 
+        # CORE-005 FIX: Add quota checking to streaming endpoint (was missing)
+        # Return error event for consistency with other streaming errors
+        if not self._check_and_record_quota(tenant_id):
+            error_data = {
+                "error": {
+                    "message": "Quota exceeded",
+                    "type": "rate_limit_error",
+                    "code": "quota_exceeded",
+                }
+            }
+            yield f"data: {json.dumps(error_data)}\n\n"
+            return
+
         # Step 0: Check for secrets in the request
         should_block, block_reason = self._check_secrets(request.messages, request_id)
         if should_block:
-            from fastapi import HTTPException
-            # For streaming, we yield an error event instead of raising
+            # CORE-005 FIX: Use consistent error event format for streaming
             error_data = {
                 "error": {
                     "message": block_reason,
@@ -912,6 +947,11 @@ class ProxyService:
         # Track streaming metrics
         upstream_start = time.time()
         chunk_count = 0
+
+        # SEC-008 FIX: Track TTL extension for long-running streams
+        # Extend TTL every 60 seconds to prevent mapping expiration
+        last_ttl_extend = time.time()
+        ttl_extend_interval = 60  # seconds
 
         try:
             # Use shared HTTP client for connection pooling
@@ -973,8 +1013,17 @@ class ProxyService:
 
                         try:
                             chunk_data = json.loads(data_str)
-                        except json.JSONDecodeError:
-                            # Skip malformed chunks
+                        except json.JSONDecodeError as e:
+                            # CORE-006 FIX: Log malformed JSON chunks instead of silently skipping
+                            logger.warning(
+                                "Malformed JSON chunk from upstream",
+                                extra={
+                                    "event": "malformed_chunk",
+                                    "error": str(e),
+                                    "data_preview": data_str[:100] if data_str else "",
+                                    "tenant_id": tenant_id,
+                                },
+                            )
                             continue
 
                         # Update metadata from actual response
@@ -993,6 +1042,13 @@ class ProxyService:
 
                         if content:
                             chunk_count += 1
+
+                            # SEC-008 FIX: Extend TTL periodically during streaming
+                            current_time = time.time()
+                            if current_time - last_ttl_extend > ttl_extend_interval:
+                                self.store.extend_ttl(request_id, tenant_id=tenant_id)
+                                last_ttl_extend = current_time
+
                             # Process through buffer
                             safe_content = buffer.process_chunk(content)
                             if safe_content:

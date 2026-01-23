@@ -10,9 +10,10 @@
 - 确定性生成（同一输入总是产生相同输出）
 """
 
-import hashlib
 from typing import Literal
 from dataclasses import dataclass
+
+from pii_airlock.core.synthetic.base import BaseSyntheticGenerator
 
 
 # 常见姓氏（按人口比例排序）
@@ -72,7 +73,7 @@ class NameGenerationResult:
     is_compound: bool  # 是否复姓
 
 
-class NameGenerator:
+class NameGenerator(BaseSyntheticGenerator):
     """中文姓名生成器
 
     使用确定性算法生成逼真的中文姓名，确保同一输入总是产生相同输出。
@@ -100,9 +101,9 @@ class NameGenerator:
             preserve_compound: 复姓是否替换为复姓
             seed: 随机种子（用于确定性生成）
         """
+        super().__init__(seed=seed)
         self.preserve_gender = preserve_gender
         self.preserve_compound = preserve_compound
-        self.seed = seed
 
     def generate(
         self,
@@ -290,12 +291,6 @@ class NameGenerator:
             char2 = self._select_single_char(gender, h2)
 
         return char1 + char2
-
-    def _hash_string(self, s: str) -> int:
-        """计算字符串的确定性哈希值"""
-        # 结合固定种子确保跨会话一致性
-        combined = f"{self.seed}:{s}"
-        return int(hashlib.md5(combined.encode()).hexdigest(), 16)
 
     def is_valid_name(self, name: str) -> bool:
         """检查是否是有效的中文姓名

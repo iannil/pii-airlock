@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
+from pii_airlock.core.synthetic.base import BaseSyntheticGenerator
+
 
 # 省级行政区划代码（前6位中的前2位）
 PROVINCE_CODES = {
@@ -50,7 +52,7 @@ class IdCardGenerationResult:
     is_valid: bool
 
 
-class IdCardGenerator:
+class IdCardGenerator(BaseSyntheticGenerator):
     """中国身份证号生成器
 
     使用确定性算法生成逼真的中国身份证号，确保同一输入总是产生相同输出。
@@ -88,10 +90,10 @@ class IdCardGenerator:
             preserve_gender: 是否保持性别
             seed: 随机种子（用于确定性生成）
         """
+        super().__init__(seed=seed)
         self.preserve_region = preserve_region
         self.preserve_birth_date = preserve_birth_date
         self.preserve_gender = preserve_gender
-        self.seed = seed
 
     def generate(self, original: str) -> IdCardGenerationResult:
         """生成仿真身份证号
@@ -258,11 +260,6 @@ class IdCardGenerator:
 
         remainder = total % 11
         return CHECK_CODE_MAP[remainder]
-
-    def _hash_string(self, s: str) -> int:
-        """计算字符串的确定性哈希值"""
-        combined = f"{self.seed}:{s}"
-        return int(hashlib.md5(combined.encode()).hexdigest(), 16)
 
     def is_valid_id_card(self, id_card: str) -> bool:
         """检查是否是有效的身份证号

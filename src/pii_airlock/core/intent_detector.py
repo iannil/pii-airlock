@@ -19,7 +19,20 @@ import os
 import yaml
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Union, List
+from typing import Optional, Union, List, Set
+
+
+# CORE-002 FIX: Environment variable for configurable question favoring types
+# Default includes PERSON, ORG, LOCATION. Add PHONE, EMAIL etc. if needed.
+# Example: PII_AIRLOCK_QUESTION_FAVORING_TYPES="PERSON,ORGANIZATION,LOCATION,PHONE,EMAIL"
+DEFAULT_QUESTION_FAVORING_TYPES = {"PERSON", "ORGANIZATION", "LOCATION"}
+
+def _get_question_favoring_types() -> Set[str]:
+    """Get question favoring types from environment or default."""
+    env_value = os.getenv("PII_AIRLOCK_QUESTION_FAVORING_TYPES", "")
+    if env_value.strip():
+        return {t.strip().upper() for t in env_value.split(",") if t.strip()}
+    return DEFAULT_QUESTION_FAVORING_TYPES.copy()
 
 
 # Default question patterns (Chinese and English)
@@ -108,7 +121,8 @@ class IntentDetector:
             self._question_context_patterns = question_context_patterns or QUESTION_CONTEXT_PATTERNS
             self._statement_context_patterns = statement_context_patterns or STATEMENT_CONTEXT_PATTERNS
             self._always_anonymize = set()
-            self._question_favoring = {"PERSON", "ORGANIZATION", "LOCATION"}
+            # CORE-002 FIX: Use environment variable for question favoring types
+            self._question_favoring = _get_question_favoring_types()
 
         # Compile patterns for better performance
         self._compiled_question = [
@@ -123,6 +137,19 @@ class IntentDetector:
             re.compile(pattern, re.IGNORECASE)
             for pattern in self._statement_context_patterns
         ]
+
+    @property
+    def question_favoring_types(self) -> Set[str]:
+        """Get the set of entity types that favor question context.
+
+        CORE-002 FIX: Expose question favoring types for use by anonymizer.
+        These entity types will be preserved (not anonymized) when detected
+        in question context.
+
+        Returns:
+            Set of entity type names (e.g., {"PERSON", "ORGANIZATION", "LOCATION"}).
+        """
+        return self._question_favoring
 
     def is_question_text(self, text: str) -> IntentResult:
         """Check if the entire text is a question.

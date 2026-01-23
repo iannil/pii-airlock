@@ -3,9 +3,10 @@
 Provides request logging and metrics middleware.
 """
 
+import hashlib
 import time
 import uuid
-from typing import Callable
+from typing import Callable, Optional
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -34,6 +35,30 @@ def _get_audit_logger():
         except ImportError:
             _audit_logger = False
     return _audit_logger if _audit_logger is not False else None
+
+
+def _mask_api_key(api_key: str) -> Optional[str]:
+    """Mask API key for logging, preserving only prefix and hash suffix.
+
+    SEC-003 FIX: Never log full API keys. Only log a masked version
+    consisting of first 4 chars + hash suffix for correlation.
+
+    Args:
+        api_key: The full API key.
+
+    Returns:
+        Masked API key like "sk-x...a1b2c3" or None if empty.
+    """
+    if not api_key:
+        return None
+
+    # Keep first 4 chars (usually "sk-x" for OpenAI keys)
+    prefix = api_key[:4] if len(api_key) >= 4 else api_key
+
+    # Add hash suffix for correlation without exposing the key
+    key_hash = hashlib.sha256(api_key.encode()).hexdigest()[:6]
+
+    return f"{prefix}...{key_hash}"
 
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
@@ -69,6 +94,9 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         user_agent = request.headers.get("user-agent", "")
         api_key = request.headers.get("authorization", "").replace("Bearer ", "")
 
+        # SEC-003 FIX: Mask API key before logging/audit
+        masked_api_key = _mask_api_key(api_key)
+
         # Set up audit context
         set_audit_fn = _get_audit_logger()
         if set_audit_fn:
@@ -76,7 +104,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                 request_id=request_id,
                 source_ip=client_ip,
                 user_agent=user_agent,
-                api_key=api_key if api_key else None,
+                api_key=masked_api_key,
             )
 
         # Track active requests

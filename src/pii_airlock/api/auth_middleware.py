@@ -33,15 +33,27 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         app.add_middleware(AuthenticationMiddleware)
     """
 
-    # Paths that skip authentication
+    # Paths that always skip authentication (public endpoints)
     SKIP_AUTH_PATHS = {
         "/health",
-        "/metrics",
         "/docs",
         "/openapi.json",
         "/redoc",
-        "/ui",
     }
+
+    # Paths that require authentication in production mode
+    # Controlled by PII_AIRLOCK_SECURE_ENDPOINTS=true (default in production)
+    SENSITIVE_PATHS = {
+        "/ui",
+        "/debug",
+        "/admin",
+        "/metrics",
+    }
+
+    # Prefixes that require authentication in production mode
+    SENSITIVE_PREFIXES = (
+        "/api/test",
+    )
 
     # Paths that are management API (require auth but different handling)
     MANAGEMENT_API_PREFIX = "/api/v1"
@@ -65,7 +77,12 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         """
         path = request.url.path
 
-        # Skip auth for public endpoints
+        # Check if sensitive endpoints require authentication
+        secure_endpoints = os.getenv(
+            "PII_AIRLOCK_SECURE_ENDPOINTS", "true"
+        ).lower() == "true"
+
+        # Skip auth for always-public endpoints (health, docs)
         if any(
             path == skip_path or path.startswith(skip_path)
             for skip_path in self.SKIP_AUTH_PATHS
@@ -75,6 +92,31 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             request.state.tenant = None
             request.state.api_key = None
             return await call_next(request)
+
+        # Check if this is a sensitive endpoint that needs protection
+        is_sensitive = (
+            path in self.SENSITIVE_PATHS
+            or any(path.startswith(prefix) for prefix in self.SENSITIVE_PREFIXES)
+        )
+
+        # In secure mode, sensitive endpoints require authentication
+        if secure_endpoints and is_sensitive:
+            # Check for authentication
+            auth_header = request.headers.get("Authorization", "")
+            if not auth_header.startswith("Bearer "):
+                logger.warning(
+                    "Unauthenticated access to sensitive endpoint blocked",
+                    extra={
+                        "event": "auth_required",
+                        "path": path,
+                        "client_ip": self._get_client_ip(request),
+                    },
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Authentication required for this endpoint",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
 
         # Check if multi-tenant is enabled
         multi_tenant_enabled = os.getenv(
@@ -137,6 +179,28 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
 
         elif multi_tenant_enabled and tenant_id_header:
             # No API key, but tenant header provided
+            # SEC-002 FIX: Only allow X-Tenant-ID header without API key if explicitly enabled
+            # This prevents tenant ID spoofing attacks
+            allow_header_tenant = os.getenv(
+                "PII_AIRLOCK_ALLOW_HEADER_TENANT", "false"
+            ).lower() == "true"
+
+            if not allow_header_tenant:
+                logger.warning(
+                    "X-Tenant-ID header rejected without API key authentication",
+                    extra={
+                        "event": "auth_failed",
+                        "tenant_id": tenant_id_header,
+                        "reason": "header_tenant_disabled",
+                        "client_ip": self._get_client_ip(request),
+                    },
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="API key required for tenant identification",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+
             tenant = get_current_tenant(tenant_id=tenant_id_header)
 
             if not tenant:

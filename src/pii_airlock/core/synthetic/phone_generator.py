@@ -10,9 +10,10 @@
 - 可选地保持号段规律
 """
 
-import hashlib
 from dataclasses import dataclass
 from typing import Literal
+
+from pii_airlock.core.synthetic.base import BaseSyntheticGenerator
 
 
 # 中国移动号段（前3位或前4位）
@@ -94,7 +95,7 @@ class PhoneGenerationResult:
     carrier: Literal["mobile", "unicom", "telecom", "broadcasting", "unknown"]
 
 
-class PhoneGenerator:
+class PhoneGenerator(BaseSyntheticGenerator):
     """中国手机号生成器
 
     使用确定性算法生成逼真的中国手机号，确保同一输入总是产生相同输出。
@@ -122,9 +123,9 @@ class PhoneGenerator:
             preserve_prefix_length: 是否保持号段前3位
             seed: 随机种子（用于确定性生成）
         """
+        super().__init__(seed=seed)
         self.preserve_carrier = preserve_carrier
         self.preserve_prefix_length = preserve_prefix_length
-        self.seed = seed
 
     def generate(self, original: str) -> PhoneGenerationResult:
         """生成仿真手机号
@@ -215,11 +216,6 @@ class PhoneGenerator:
             suffix += str(digit)
 
         return suffix
-
-    def _hash_string(self, s: str) -> int:
-        """计算字符串的确定性哈希值"""
-        combined = f"{self.seed}:{s}"
-        return int(hashlib.md5(combined.encode()).hexdigest(), 16)
 
     def get_carrier(self, phone: str) -> str:
         """获取手机号所属运营商

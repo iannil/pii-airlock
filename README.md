@@ -6,7 +6,7 @@
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/pii-airlock/pii-airlock/releases)
+[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/pii-airlock/pii-airlock/releases)
 [![Tests](https://img.shields.io/badge/tests-600%20passed-brightgreen.svg)](https://github.com/pii-airlock/pii-airlock/actions)
 [![Coverage](https://img.shields.io/badge/coverage-73%25-green.svg)](https://github.com/pii-airlock/pii-airlock/actions)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
@@ -25,7 +25,7 @@ PII-AIRLOCK is an open-source middleware/reverse proxy that protects sensitive p
 
 ```
 ┌─────────────────┐     ┌─────────────────────────────────────────┐     ┌─────────────────┐
-│                 │     │           PII-AIRLOCK (v2.0)            │     │                 │
+│                 │     │           PII-AIRLOCK (v1.1)            │     │                 │
 │  Your App       │────▶│  ┌─────────┐    ┌─────────────────┐     │────▶│   OpenAI API    │
 │  (Dify/Flowise) │     │  │Anonymize│────│  Mapping Store  │     │     │   Claude API    │
 │                 │◀────│  └─────────┘    │   + Cache       │     │◀────│   Azure OpenAI  │

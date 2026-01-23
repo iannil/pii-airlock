@@ -188,6 +188,30 @@ class HealthResponse(BaseModel):
     version: str
 
 
+# OPS-001/002 FIX: Add detailed health check models
+class DependencyCheck(BaseModel):
+    """Individual dependency check result."""
+
+    name: str = Field(..., description="Dependency name")
+    status: str = Field(..., description="Status: ok, degraded, unhealthy")
+    latency_ms: Optional[float] = Field(None, description="Check latency in milliseconds")
+    message: Optional[str] = Field(None, description="Additional status message")
+
+
+class ReadyResponse(BaseModel):
+    """Readiness check response with dependency status."""
+
+    status: str = Field("ok", description="Overall status: ok, degraded, unhealthy")
+    version: str = Field(..., description="Application version")
+    checks: list[DependencyCheck] = Field(default_factory=list, description="Individual dependency checks")
+
+
+class LiveResponse(BaseModel):
+    """Liveness check response (minimal, fast)."""
+
+    status: str = "ok"
+
+
 class TestAnonymizeRequest(BaseModel):
     """Request body for test anonymization endpoint."""
 

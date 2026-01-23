@@ -6,7 +6,7 @@ Provides endpoints for managing and activating compliance presets
 
 import logging
 from typing import Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from pii_airlock.config.compliance_loader import (
@@ -20,6 +20,22 @@ from pii_airlock.core.strategies import StrategyType, StrategyConfig
 
 
 logger = logging.getLogger(__name__)
+
+
+# OPS-007 FIX: Audit logger for config changes
+_audit_logger = None
+
+
+def _get_audit_logger():
+    """Lazy import of audit logger."""
+    global _audit_logger
+    if _audit_logger is None:
+        try:
+            from pii_airlock.audit import audit_logger
+            _audit_logger = audit_logger()
+        except ImportError:
+            _audit_logger = False
+    return _audit_logger if _audit_logger is not False else None
 
 
 # Global active preset (simple in-memory storage for now)
@@ -219,6 +235,7 @@ async def activate_preset(request: ComplianceActivateRequest) -> ComplianceActiv
         )
 
     preset = presets[key]
+    previous_preset = _active_preset.name if _active_preset else None
 
     # Apply preset strategies to global configuration
     _active_strategy_config = _apply_preset_strategies(preset)
@@ -242,6 +259,27 @@ async def activate_preset(request: ComplianceActivateRequest) -> ComplianceActiv
         },
     )
 
+    # OPS-007 FIX: Audit log config change
+    audit = _get_audit_logger()
+    if audit:
+        try:
+            import asyncio
+            loop = asyncio.get_running_loop()
+            loop.create_task(
+                audit.log(
+                    event_type="config_changed",
+                    metadata={
+                        "action": "activate_preset",
+                        "preset_name": preset.name,
+                        "preset_version": preset.version,
+                        "previous_preset": previous_preset,
+                        "strategies_count": len(preset.strategies),
+                    },
+                )
+            )
+        except RuntimeError:
+            pass  # No event loop running
+
     return ComplianceActivateResponse(
         message=f"Compliance preset '{preset.name}' activated successfully",
         preset=_preset_to_detail(preset),
@@ -254,7 +292,26 @@ async def deactivate_preset() -> dict[str, str]:
 
     Returns to the default configuration.
     """
+    previous_preset = _active_preset.name if _active_preset else None
     clear_active_preset()
+
+    # OPS-007 FIX: Audit log config change
+    audit = _get_audit_logger()
+    if audit and previous_preset:
+        try:
+            import asyncio
+            loop = asyncio.get_running_loop()
+            loop.create_task(
+                audit.log(
+                    event_type="config_changed",
+                    metadata={
+                        "action": "deactivate_preset",
+                        "previous_preset": previous_preset,
+                    },
+                )
+            )
+        except RuntimeError:
+            pass
 
     return {
         "message": "Compliance preset deactivated. Using default configuration.",
@@ -269,6 +326,25 @@ async def reload_presets() -> dict[str, str]:
     """
     clear_preset_cache()
     presets = get_all_presets()
+
+    # OPS-007 FIX: Audit log config reload
+    audit = _get_audit_logger()
+    if audit:
+        try:
+            import asyncio
+            loop = asyncio.get_running_loop()
+            loop.create_task(
+                audit.log(
+                    event_type="config_reloaded",
+                    metadata={
+                        "action": "reload_presets",
+                        "presets_count": len(presets),
+                        "preset_names": list(presets.keys()),
+                    },
+                )
+            )
+        except RuntimeError:
+            pass
 
     return {
         "message": f"Compliance presets reloaded. {len(presets)} presets available.",

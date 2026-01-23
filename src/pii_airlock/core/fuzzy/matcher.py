@@ -62,27 +62,31 @@ class FuzzyMatcher:
         (re.compile(r"<([a-z_]+)_(\d+)>"),
          FuzzyMatchType.CASE_VARIANT, 0.95),
 
-        # 3. 空格变体 - 高优先级
+        # 3. 空格变体 - 高优先级 (underscore with optional spaces)
         (re.compile(r"<\s*([A-Za-z_]+)\s*_\s*(\d+)\s*>", re.IGNORECASE),
          FuzzyMatchType.WHITESPACE, 0.90),
 
-        # 4. 方括号变体
+        # CORE-001 FIX: 4. 空格替代下划线变体 (如 <PERSON 1>, <person 1>)
+        (re.compile(r"<([A-Za-z_]+)\s+(\d+)>", re.IGNORECASE),
+         FuzzyMatchType.WHITESPACE, 0.90),
+
+        # 5. 方括号变体
         (re.compile(r"\[\s*([A-Za-z_]+)\s*[_\s]\s*(\d+)\s*\]", re.IGNORECASE),
          FuzzyMatchType.BRACKET_VARIANT, 0.85),
 
-        # 5. 大括号变体
+        # 6. 大括号变体
         (re.compile(r"\{\s*([A-Za-z_]+)\s*[_\s]\s*(\d+)\s*\}", re.IGNORECASE),
          FuzzyMatchType.BRACKET_VARIANT, 0.85),
 
-        # 6. 圆括号变体
+        # 7. 圆括号变体
         (re.compile(r"\(\s*([A-Za-z_]+)\s*[_\s]\s*(\d+)\s*\)", re.IGNORECASE),
          FuzzyMatchType.BRACKET_VARIANT, 0.85),
 
-        # 7. 连字符分隔符
+        # 8. 连字符分隔符
         (re.compile(r"<([A-Za-z_]+)-(\d+)>", re.IGNORECASE),
          FuzzyMatchType.SEPARATOR_VARIANT, 0.90),
 
-        # 8. 冒号分隔符
+        # 9. 冒号分隔符
         (re.compile(r"<([A-Za-z_]+):(\d+)>", re.IGNORECASE),
          FuzzyMatchType.SEPARATOR_VARIANT, 0.90),
     ]

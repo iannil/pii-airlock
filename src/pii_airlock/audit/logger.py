@@ -6,6 +6,7 @@
 """
 
 import asyncio
+import logging
 import os
 from collections import defaultdict
 from contextvars import ContextVar
@@ -20,6 +21,8 @@ from pii_airlock.audit.models import (
 )
 from pii_airlock.audit.store import get_audit_store, AuditStore
 
+# CORE-004 FIX: Add proper logger instead of using print
+_logger = logging.getLogger(__name__)
 
 # 请求上下文变量
 _audit_context: ContextVar[dict] = ContextVar("audit_context", default={})
@@ -194,8 +197,12 @@ class AuditLogger:
         except Exception as e:
             # 写入失败，重新放入队列（最多保留最近 1000 条）
             self._pending_events.extend(events[-1000:])
-            # 这里应该有更好的错误处理，比如告警
-            print(f"Error writing audit logs: {e}")
+            # CORE-004 FIX: Use proper logger instead of print
+            _logger.error(
+                "Error writing audit logs: %s",
+                str(e),
+                exc_info=True,
+            )
 
     async def flush(self) -> None:
         """手动刷新缓冲区"""

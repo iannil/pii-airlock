@@ -76,3 +76,22 @@ SECRET_BLOCKED = Counter(
     "Total requests blocked due to secrets",
     ["secret_type"],
 )
+
+# OPS-006: Local processing latency
+ANONYMIZATION_DURATION = Histogram(
+    "pii_airlock_anonymization_duration_seconds",
+    "Anonymization processing latency",
+    buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0],
+)
+
+DEANONYMIZATION_DURATION = Histogram(
+    "pii_airlock_deanonymization_duration_seconds",
+    "Deanonymization processing latency",
+    buckets=[0.0001, 0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1],
+)
+
+SECRET_SCAN_DURATION = Histogram(
+    "pii_airlock_secret_scan_duration_seconds",
+    "Secret scanning latency",
+    buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5],
+)

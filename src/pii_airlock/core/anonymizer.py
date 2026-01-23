@@ -581,9 +581,11 @@ class Anonymizer:
         Returns:
             Tuple of (should_preserve, reason).
         """
-        # Only check intent for certain entity types
-        # (PII types like phone, email, etc should always be anonymized in statements)
-        question_favoring_types = {"PERSON", "ORGANIZATION", "LOCATION"}
+        # CORE-002 FIX: Use intent detector's configurable question favoring types
+        # instead of hardcoded set. This allows PHONE, EMAIL etc. to optionally
+        # participate in question context protection via environment variable:
+        # PII_AIRLOCK_QUESTION_FAVORING_TYPES="PERSON,ORGANIZATION,LOCATION,PHONE,EMAIL"
+        question_favoring_types = self.intent_detector.question_favoring_types
 
         if entity_type not in question_favoring_types:
             return (False, "entity_type_not_favoring")

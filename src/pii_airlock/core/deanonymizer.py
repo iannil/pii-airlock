@@ -15,11 +15,16 @@ Example:
     张三您好
 """
 
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Optional
 
 from pii_airlock.core.mapping import PIIMapping
+
+# CORE-001 FIX: Environment variable to control enhanced fuzzy matching
+# Default to True for better LLM response handling
+ENABLE_ENHANCED_FUZZY = os.getenv("PII_AIRLOCK_ENHANCED_FUZZY", "true").lower() == "true"
 
 # 导入模糊匹配模块（可选，如果可用）
 try:
@@ -88,7 +93,7 @@ class Deanonymizer:
     def __init__(
         self,
         enable_fuzzy_matching: bool = True,
-        use_enhanced_fuzzy: bool = False,
+        use_enhanced_fuzzy: Optional[bool] = None,
         confidence_threshold: float = 0.75,
     ) -> None:
         """Initialize the deanonymizer.
@@ -97,16 +102,21 @@ class Deanonymizer:
             enable_fuzzy_matching: Whether to attempt fuzzy matching
                 for LLM-modified placeholders.
             use_enhanced_fuzzy: Whether to use the enhanced fuzzy matcher
-                (with confidence scoring). Recommended for production.
+                (with confidence scoring). Defaults to PII_AIRLOCK_ENHANCED_FUZZY
+                environment variable (default: true).
             confidence_threshold: Minimum confidence threshold for enhanced
                 fuzzy matching (0.0 - 1.0).
         """
         self.enable_fuzzy_matching = enable_fuzzy_matching
+
+        # CORE-001 FIX: Use environment variable default if not explicitly specified
+        if use_enhanced_fuzzy is None:
+            use_enhanced_fuzzy = ENABLE_ENHANCED_FUZZY
         self.use_enhanced_fuzzy = use_enhanced_fuzzy
 
         # 初始化增强模糊匹配器
         self._smart_rehydrator: Optional[SmartRehydrator] = None
-        if FUZZY_AVAILABLE and use_enhanced_fuzzy:
+        if FUZZY_AVAILABLE and self.use_enhanced_fuzzy:
             self._smart_rehydrator = SmartRehydrator(
                 enable_fuzzy=True,
                 confidence_threshold=confidence_threshold,
@@ -142,14 +152,18 @@ class Deanonymizer:
         if not text:
             return DeanonymizationResult(text=text)
 
-        # 使用增强模糊匹配器（如果启用且可用）
-        if self.use_enhanced_fuzzy and self._smart_rehydrator:
+        # CORE-001 FIX: 使用增强模糊匹配器（如果启用且可用）
+        # 注意：enable_fuzzy_matching 控制是否启用模糊匹配功能
+        if self.use_enhanced_fuzzy and self._smart_rehydrator and self.enable_fuzzy_matching:
             result_text, exact_count, fuzzy_count = self._smart_rehydrator.rehydrate(text, mapping)
+
+            # 收集未解析的占位符
+            unresolved = self._smart_rehydrator.unmatched_placeholders.copy()
 
             return DeanonymizationResult(
                 text=result_text,
                 replaced_count=exact_count + fuzzy_count,
-                unresolved=[],
+                unresolved=unresolved,
             )
 
         # 使用传统方法（向后兼容）

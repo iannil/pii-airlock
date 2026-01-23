@@ -6,7 +6,7 @@
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/pii-airlock/pii-airlock/releases)
+[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/pii-airlock/pii-airlock/releases)
 [![Tests](https://img.shields.io/badge/tests-600%20passed-brightgreen.svg)](https://github.com/pii-airlock/pii-airlock/actions)
 [![Coverage](https://img.shields.io/badge/coverage-73%25-green.svg)](https://github.com/pii-airlock/pii-airlock/actions)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
@@ -25,7 +25,7 @@ PII-AIRLOCK 是一个开源中间件/反向代理，用于在使用公有 LLM AP
 
 ```
 ┌─────────────────┐     ┌─────────────────────────────────────────┐     ┌─────────────────┐
-│                 │     │           PII-AIRLOCK (v2.0)            │     │                 │
+│                 │     │           PII-AIRLOCK (v1.1)            │     │                 │
 │  您的应用       │────▶│  ┌─────────┐    ┌─────────────────┐     │────▶│   OpenAI API    │
 │  (Dify/Flowise) │     │  │  脱敏   │────│   映射存储      │     │     │   Claude API    │
 │                 │◀────│  └─────────┘    │   + 缓存        │     │◀────│   Azure OpenAI  │

@@ -5,6 +5,7 @@ Provides OpenAI-compatible API endpoints and management API.
 """
 
 import os
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -28,6 +29,10 @@ from pii_airlock.api.models import (
     TestDeanonymizeResponse,
     EmbeddingRequest,
     EmbeddingResponse,
+    # OPS-001/002 FIX: Import new health check models
+    DependencyCheck,
+    ReadyResponse,
+    LiveResponse,
 )
 from pii_airlock.api.proxy import ProxyService
 from pii_airlock.api.middleware import RequestLoggingMiddleware
@@ -149,8 +154,143 @@ app.include_router(intent_api.router)
 
 @app.get("/health", response_model=HealthResponse, tags=["Health"])
 async def health_check():
-    """Health check endpoint."""
+    """Health check endpoint (liveness probe).
+
+    Returns basic status for container orchestration liveness checks.
+    For detailed dependency status, use /ready endpoint.
+    """
     return HealthResponse(status="ok", version=__version__)
+
+
+# OPS-001/002 FIX: Add detailed readiness check endpoint
+@app.get("/ready", response_model=ReadyResponse, tags=["Health"])
+async def readiness_check():
+    """Readiness check endpoint with dependency verification.
+
+    Checks all dependencies and returns detailed status:
+    - Redis connectivity (if configured)
+    - spaCy model availability
+    - Mapping store health
+
+    Returns 200 if all checks pass, 503 if any critical check fails.
+    """
+    checks = []
+    overall_status = "ok"
+
+    # Check 1: spaCy model availability
+    spacy_start = time.time()
+    try:
+        from pii_airlock.core.anonymizer import get_shared_analyzer
+        analyzer = get_shared_analyzer()
+        # Simple test to verify model is loaded
+        _ = analyzer.analyze("test", language="zh", entities=["PERSON"])
+        spacy_latency = (time.time() - spacy_start) * 1000
+        checks.append(DependencyCheck(
+            name="spacy",
+            status="ok",
+            latency_ms=round(spacy_latency, 2),
+            message="Chinese NLP model loaded",
+        ))
+    except Exception as e:
+        spacy_latency = (time.time() - spacy_start) * 1000
+        checks.append(DependencyCheck(
+            name="spacy",
+            status="unhealthy",
+            latency_ms=round(spacy_latency, 2),
+            message=f"Model load failed: {str(e)[:100]}",
+        ))
+        overall_status = "unhealthy"
+
+    # Check 2: Redis connectivity (if configured)
+    redis_url = os.getenv("PII_AIRLOCK_REDIS_URL")
+    if redis_url:
+        redis_start = time.time()
+        try:
+            import redis.asyncio as redis_async
+            client = redis_async.from_url(redis_url)
+            await client.ping()
+            await client.close()
+            redis_latency = (time.time() - redis_start) * 1000
+            checks.append(DependencyCheck(
+                name="redis",
+                status="ok",
+                latency_ms=round(redis_latency, 2),
+                message="Connected",
+            ))
+        except Exception as e:
+            redis_latency = (time.time() - redis_start) * 1000
+            checks.append(DependencyCheck(
+                name="redis",
+                status="unhealthy",
+                latency_ms=round(redis_latency, 2),
+                message=f"Connection failed: {str(e)[:100]}",
+            ))
+            overall_status = "unhealthy"
+    else:
+        checks.append(DependencyCheck(
+            name="redis",
+            status="ok",
+            message="Not configured (using memory store)",
+        ))
+
+    # Check 3: Mapping store health
+    store_start = time.time()
+    try:
+        if _store:
+            # Test basic operations
+            test_key = "__health_check__"
+            from pii_airlock.core.mapping import PIIMapping
+            test_mapping = PIIMapping(session_id=test_key)
+            _store.save(test_key, test_mapping, tenant_id="__system__")
+            _store.delete(test_key, tenant_id="__system__")
+            store_latency = (time.time() - store_start) * 1000
+            checks.append(DependencyCheck(
+                name="mapping_store",
+                status="ok",
+                latency_ms=round(store_latency, 2),
+                message="Operational",
+            ))
+        else:
+            checks.append(DependencyCheck(
+                name="mapping_store",
+                status="ok",
+                message="Not initialized (lazy load)",
+            ))
+    except Exception as e:
+        store_latency = (time.time() - store_start) * 1000
+        checks.append(DependencyCheck(
+            name="mapping_store",
+            status="degraded",
+            latency_ms=round(store_latency, 2),
+            message=f"Check failed: {str(e)[:100]}",
+        ))
+        if overall_status == "ok":
+            overall_status = "degraded"
+
+    response = ReadyResponse(
+        status=overall_status,
+        version=__version__,
+        checks=checks,
+    )
+
+    # Return 503 if unhealthy
+    if overall_status == "unhealthy":
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content=response.model_dump(),
+        )
+
+    return response
+
+
+@app.get("/live", response_model=LiveResponse, tags=["Health"])
+async def liveness_check():
+    """Minimal liveness probe (Kubernetes compatible).
+
+    Returns immediately with minimal processing.
+    Use this for container liveness probes.
+    """
+    return LiveResponse(status="ok")
 
 
 @app.get("/metrics", tags=["Monitoring"])
@@ -245,7 +385,9 @@ async def chat_completions(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # SEC-004 FIX: Log the actual error internally but don't expose to client
+        logger.exception("Chat completion failed", extra={"error": str(e)})
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @app.exception_handler(HTTPException)
@@ -280,12 +422,12 @@ async def create_embeddings(
     PII in the input text is automatically anonymized before sending to the upstream,
     and the response is returned as-is (embeddings don't contain PII).
 
-    Note: Current implementation proxies through to upstream without
-    PII anonymization since embeddings typically don't expose PII in responses.
-    For full PII protection, consider anonymizing input text before calling.
+    CORE-003 FIX: Now anonymizes input text before sending to upstream to prevent
+    PII exposure to the LLM provider.
     """
     import httpx
     import time
+    import uuid
 
     # Set tenant_id in audit context
     try:
@@ -295,7 +437,36 @@ async def create_embeddings(
         pass
 
     try:
-        # Prepare request to upstream
+        # CORE-003 FIX: Anonymize input text(s) before sending to upstream
+        request_id = str(uuid.uuid4())
+        anonymizer = proxy._ensure_anonymizer()
+
+        # Handle both string and list inputs
+        if isinstance(body.input, str):
+            result = anonymizer.anonymize(body.input, session_id=request_id)
+            anonymized_input = result.text
+            pii_count = len(result.entities)
+        else:
+            # List of strings
+            anonymized_input = []
+            pii_count = 0
+            for text in body.input:
+                result = anonymizer.anonymize(text, session_id=request_id)
+                anonymized_input.append(result.text)
+                pii_count += len(result.entities)
+
+        # Log PII anonymization for embeddings
+        if pii_count > 0:
+            logger.info(
+                "PII anonymized in embeddings request",
+                extra={
+                    "event": "embeddings_pii_anonymized",
+                    "pii_count": pii_count,
+                    "tenant_id": tenant_id,
+                },
+            )
+
+        # Prepare request to upstream with anonymized input
         upstream_url = os.getenv("PII_AIRLOCK_UPSTREAM_URL", "https://api.openai.com")
         api_key = os.getenv("PII_AIRLOCK_API_KEY") or os.getenv("OPENAI_API_KEY")
 
@@ -307,19 +478,33 @@ async def create_embeddings(
             "Content-Type": "application/json",
         }
 
+        # Build request body with anonymized input
+        request_body = body.dict(exclude_none=True)
+        request_body["input"] = anonymized_input
+
         async with httpx.AsyncClient(timeout=120) as client:
             response = await client.post(
                 f"{upstream_url}/v1/embeddings",
-                json=body.dict(exclude_none=True),
+                json=request_body,
                 headers=headers,
             )
             response.raise_for_status()
             return response.json()
 
     except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+        # SEC-004 FIX: Don't expose upstream error details to client
+        logger.warning(
+            "Upstream embeddings request failed",
+            extra={"status_code": e.response.status_code, "error": e.response.text[:200]},
+        )
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail="Upstream service error",
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # SEC-004 FIX: Log the actual error internally but don't expose to client
+        logger.exception("Embeddings request failed", extra={"error": str(e)})
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 # ============================================================================
@@ -992,6 +1177,29 @@ async def create_api_key(
         rate_limit=body.rate_limit,
     )
 
+    # OPS-008 FIX: Audit log API key creation
+    try:
+        from pii_airlock.audit import audit_logger
+        audit = audit_logger()
+        if audit:
+            import asyncio
+            loop = asyncio.get_running_loop()
+            loop.create_task(
+                audit.log(
+                    event_type="config_changed",
+                    tenant_id=tenant_id,
+                    metadata={
+                        "action": "api_key_created",
+                        "key_id": api_key_obj.key_id,
+                        "key_name": body.name,
+                        "scopes": body.scopes,
+                        "expires_in_days": body.expires_in_days,
+                    },
+                )
+            )
+    except (ImportError, RuntimeError):
+        pass
+
     return APIKeyCreateResponse(
         api_key=full_key,
         key=APIKeyResponse(
@@ -1056,6 +1264,26 @@ async def revoke_api_key(
 
     if not success:
         raise HTTPException(status_code=404, detail="API key not found")
+
+    # OPS-008 FIX: Audit log API key revocation
+    try:
+        from pii_airlock.audit import audit_logger
+        audit = audit_logger()
+        if audit:
+            import asyncio
+            loop = asyncio.get_running_loop()
+            loop.create_task(
+                audit.log(
+                    event_type="config_changed",
+                    tenant_id=tenant_id,
+                    metadata={
+                        "action": "api_key_revoked",
+                        "key_id": key_id,
+                    },
+                )
+            )
+    except (ImportError, RuntimeError):
+        pass
 
     return {"message": "API key revoked", "key_id": key_id}
 

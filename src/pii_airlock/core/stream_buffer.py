@@ -55,11 +55,14 @@ class StreamBuffer:
     # Maximum length of a placeholder (e.g., <CREDIT_CARD_999>)
     MAX_PLACEHOLDER_LENGTH = 25
 
-    # Pattern for complete placeholders
-    COMPLETE_PLACEHOLDER = re.compile(r"<[A-Z_]+_\d+>")
+    # Pattern for complete placeholders: <TYPE_N> where TYPE is uppercase letters/underscores
+    COMPLETE_PLACEHOLDER = re.compile(r"<[A-Z][A-Z_]*_\d+>")
 
-    # Pattern for potential placeholder start (incomplete)
-    POTENTIAL_START = re.compile(r"<[A-Z_]*\d*$")
+    # SEC-007 FIX: More strict pattern for potential placeholder start
+    # Must start with < followed by at least one uppercase letter
+    # May contain more uppercase letters and underscores
+    # May end with underscore and/or digits (but not complete)
+    POTENTIAL_START = re.compile(r"<[A-Z][A-Z_]*(?:_\d*)?$")
 
     def __init__(
         self,
@@ -177,11 +180,27 @@ class StreamBuffer:
             safe = self.buffer[:last_open]
             remainder = self.buffer[last_open:]
 
-            # Safety check: if remainder is too long, it's probably not a placeholder
+            # SEC-009 FIX: More careful handling of long potential placeholders
+            # Check if the remainder still looks like a valid placeholder pattern
             if len(remainder) > self.MAX_PLACEHOLDER_LENGTH:
-                # Force emit everything, it's not a real placeholder
-                result = self.deanonymizer.deanonymize(self.buffer, self.mapping)
-                return result.text, ""
+                # Check if it could still be a valid placeholder being constructed
+                # Valid placeholders shouldn't have lowercase letters or special chars after <
+                if re.match(r"^<[A-Z][A-Z_0-9]*$", remainder):
+                    # Still looks valid but too long, wait a bit more
+                    # but cap at 2x max length to prevent memory issues
+                    if len(remainder) > self.MAX_PLACEHOLDER_LENGTH * 2:
+                        result = self.deanonymizer.deanonymize(self.buffer, self.mapping)
+                        return result.text, ""
+                    # Keep buffering but return safe portion
+                    if safe:
+                        result = self.deanonymizer.deanonymize(safe, self.mapping)
+                        return result.text, remainder
+                    else:
+                        return "", remainder
+                else:
+                    # Contains invalid characters, force emit everything
+                    result = self.deanonymizer.deanonymize(self.buffer, self.mapping)
+                    return result.text, ""
 
             if safe:
                 result = self.deanonymizer.deanonymize(safe, self.mapping)

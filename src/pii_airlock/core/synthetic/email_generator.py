@@ -9,10 +9,11 @@
 - 确定性生成（同一输入总是产生相同输出）
 """
 
-import hashlib
 import re
 from dataclasses import dataclass
 from typing import Literal
+
+from pii_airlock.core.synthetic.base import BaseSyntheticGenerator
 
 
 # 常见邮箱域名（中文用户常用）
@@ -86,7 +87,7 @@ class EmailGenerationResult:
     pattern: str
 
 
-class EmailGenerator:
+class EmailGenerator(BaseSyntheticGenerator):
     """邮箱地址生成器
 
     使用确定性算法生成逼真的邮箱地址，确保同一输入总是产生相同输出。
@@ -115,9 +116,9 @@ class EmailGenerator:
             common_domains: 自定义常用域名列表
             seed: 随机种子（用于确定性生成）
         """
+        super().__init__(seed=seed)
         self.preserve_domain_type = preserve_domain_type
         self.common_domains = common_domains or COMMON_DOMAINS
-        self.seed = seed
 
         # 分类域名
         self.domestic_domains = [d for d in self.common_domains if
@@ -289,11 +290,6 @@ class EmailGenerator:
 
         idx = hash_val % len(candidates)
         return candidates[idx]
-
-    def _hash_string(self, s: str) -> int:
-        """计算字符串的确定性哈希值"""
-        combined = f"{self.seed}:{s}"
-        return int(hashlib.md5(combined.encode()).hexdigest(), 16)
 
     def is_valid_email(self, email: str) -> bool:
         """检查是否是有效的邮箱地址"""

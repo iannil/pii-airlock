@@ -4,8 +4,11 @@
 统一的仿真数据生成接口，整合各种 PII 类型的生成器。
 """
 
+import hashlib
+import os
+import secrets
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 from pii_airlock.core.synthetic.name_generator import NameGenerator
 from pii_airlock.core.synthetic.phone_generator import PhoneGenerator
@@ -70,7 +73,8 @@ class SyntheticDataGenerator:
     def __init__(
         self,
         *,
-        seed: int = 42,
+        seed: Optional[int] = None,
+        session_id: Optional[str] = None,
         name_preserve_gender: bool = False,
         phone_preserve_carrier: bool = True,
         id_preserve_region: bool = True,
@@ -79,33 +83,45 @@ class SyntheticDataGenerator:
     ):
         """初始化仿真数据生成器
 
+        SEC-006 FIX: 添加会话隔离，使相同原始值在不同会话生成不同的仿真值。
+
         Args:
-            seed: 随机种子（用于确定性生成）
+            seed: 随机种子（如果不提供，将基于 session_id 或随机生成）
+            session_id: 会话标识（用于会话级别的隔离）
             name_preserve_gender: 姓名是否保持性别
             phone_preserve_carrier: 手机号是否保持运营商
             id_preserve_region: 身份证是否保持地区码
             id_preserve_birth_date: 身份证是否保持出生日期
             email_preserve_domain_type: 邮箱是否保持域名类型
         """
-        self.seed = seed
+        # SEC-006 FIX: 基于会话生成隔离的种子
+        self.session_id = session_id or secrets.token_hex(8)
 
-        # 初始化各类型生成器
+        if seed is not None:
+            # 即使提供了 seed，也加入会话隔离
+            session_hash = int(hashlib.sha256(self.session_id.encode()).hexdigest()[:8], 16)
+            self.seed = (seed + session_hash) % (2**31)
+        else:
+            # 基于会话 ID 生成确定性种子
+            self.seed = int(hashlib.sha256(self.session_id.encode()).hexdigest()[:8], 16)
+
+        # SEC-006 FIX: 初始化各类型生成器时使用会话隔离的种子
         self.name_generator = NameGenerator(
             preserve_gender=name_preserve_gender,
-            seed=seed,
+            seed=self.seed,
         )
         self.phone_generator = PhoneGenerator(
             preserve_carrier=phone_preserve_carrier,
-            seed=seed,
+            seed=self.seed,
         )
         self.id_card_generator = IdCardGenerator(
             preserve_region=id_preserve_region,
             preserve_birth_date=id_preserve_birth_date,
-            seed=seed,
+            seed=self.seed,
         )
         self.email_generator = EmailGenerator(
             preserve_domain_type=email_preserve_domain_type,
-            seed=seed,
+            seed=self.seed,
         )
 
         # 映射缓存（确保同一输入产生相同输出）
@@ -127,8 +143,8 @@ class SyntheticDataGenerator:
         Returns:
             SyntheticMapping 包含原始值和仿真值的映射
         """
-        # 检查缓存
-        cache_key = f"{entity_type}:{original}:{kwargs}"
+        # SEC-006 FIX: 缓存键包含会话 ID，确保会话隔离
+        cache_key = f"{self.session_id}:{entity_type}:{original}:{kwargs}"
         if cache_key in self._mapping_cache:
             return self._mapping_cache[cache_key]
 
@@ -303,12 +319,15 @@ class SyntheticDataGenerator:
         return len(self._mapping_cache)
 
 
-# 全局单例
+# 全局单例 (仅用于不需要会话隔离的场景)
 _synthetic_generator: SyntheticDataGenerator | None = None
 
 
 def get_synthetic_generator(**kwargs) -> SyntheticDataGenerator:
     """获取全局仿真数据生成器实例
+
+    注意：此函数返回全局单例，所有请求共享同一个生成器。
+    如需会话隔离，请使用 create_session_generator() 函数。
 
     Args:
         **kwargs: 传递给 SyntheticDataGenerator 的参数
@@ -322,3 +341,22 @@ def get_synthetic_generator(**kwargs) -> SyntheticDataGenerator:
         _synthetic_generator = SyntheticDataGenerator(**kwargs)
 
     return _synthetic_generator
+
+
+def create_session_generator(
+    session_id: Optional[str] = None,
+    **kwargs,
+) -> SyntheticDataGenerator:
+    """创建会话隔离的仿真数据生成器
+
+    SEC-006 FIX: 每个会话使用独立的生成器，确保相同原始值
+    在不同会话中生成不同的仿真值，防止逆向推导。
+
+    Args:
+        session_id: 会话标识。如果不提供，将自动生成随机 ID。
+        **kwargs: 其他传递给 SyntheticDataGenerator 的参数
+
+    Returns:
+        新的 SyntheticDataGenerator 实例
+    """
+    return SyntheticDataGenerator(session_id=session_id, **kwargs)
